@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 module RawServer where
 import Network.Socket
 import System.Environment
