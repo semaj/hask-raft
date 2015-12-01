@@ -6,6 +6,7 @@
 module Server where
 import GHC.Generics
 import Data.Aeson
+import Data.Time
 
 data Command = Command String String deriving (Generic, Show)
 -- Command <Key> <Value> (to put)
@@ -28,7 +29,10 @@ data Server = Server {
   lastApplied :: Int,
   -- Only on leaders
   nextIndices :: [Int],
-  matchIndices :: [Int]
+  matchIndices :: [Int],
+
+  timeout :: Int, -- seconds
+  started :: !UTCTime
 }
 
 

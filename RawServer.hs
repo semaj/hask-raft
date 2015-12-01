@@ -1,7 +1,14 @@
-module RawServer where
+{-# LANGUAGE OverloadedStrings #-}
+
+module Main where
+import Message
+import Server
+
 import Network.Socket
 import System.Environment
 import Control.Exception
+import Data.Aeson
+import Data.ByteString.Lazy.UTF8 (fromString)
 
 getSocket :: String -> IO Socket
 getSocket id = do
@@ -13,7 +20,8 @@ start :: Socket -> IO ()
 start s = do
   send s "hello world!"
   r <- recv s 1024
-  putStrLn r
+  let mMessage = decode (fromString r) :: Maybe Message
+  putStrLn $ show mMessage
   start s
 
 

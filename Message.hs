@@ -10,8 +10,8 @@ import Data.Char
 import Data.Maybe
 import GHC.Generics
 
-data MessType = GET | PUT | OK | FAIL | REDIRECT
-                | AE | AEResponse | RV | RVResponse deriving (Read)
+data MessType = GET | PUT | OK | FAIL | REDIRECT |
+                AE | AEResponse | RV | RVResponse deriving (Read)
 
 instance Show MessType where
   show GET = "get"
@@ -56,7 +56,8 @@ instance ToJSON Message where
     "type"   .= (show messType),
     "MID"    .= mid,
     "key"    .= fromMaybe "" key,
-    "value"  .= fromMaybe "" value ]
+    "value"  .= fromMaybe "" value,
+    "rmess"  .= rmess ]
 
 data RMessage = AEM {
   term :: Int,
