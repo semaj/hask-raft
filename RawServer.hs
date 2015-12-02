@@ -15,6 +15,7 @@ import Control.Monad
 import Data.Maybe
 import System.Random
 import Data.Time
+import Data.HashMap.Lazy hiding (map)
 
 tryGet :: Chan a -> IO (Maybe a)
 tryGet chan = do
@@ -28,7 +29,7 @@ tryGet chan = do
 receiver :: Socket -> Chan Message -> IO ()
 receiver s messages = do
   forever $ do
-    msg <- recv s 32768
+    msg <- recv s 4096
     let splitR = splitOn "\n" msg
         mMessages = map (decode . fromString) splitR :: [Maybe Message]
     writeList2Chan messages $ catMaybes mMessages
@@ -54,7 +55,7 @@ initialServer :: String -> [String] -> IO Server
 initialServer myID otherIDs = do
   timeout <- getStdRandom $ randomR timeoutRange
   started <- getCurrentTime
-  return $ Server Candidate myID otherIDs 0 "" [] 0 0 [] [] timeout started
+  return $ Server Candidate myID otherIDs empty 0 "" [] 0 0 [] [] timeout started
 
 main :: IO ()
 main = do

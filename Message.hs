@@ -55,26 +55,30 @@ instance ToJSON Message where
     "leader" .= leader,
     "type"   .= (show messType),
     "MID"    .= mid,
-    "key"    .= fromMaybe "" key,
-    "value"  .= fromMaybe "" value,
+    "key"    .= key, -- Aeson encodes these maybes as "null"
+    "value"  .= value,
     "rmess"  .= rmess ]
 
 data RMessage = AEM {
   term :: Int,
+  source :: String,
   leaderId :: !String,
   prevLogIndex :: Int,
   entries :: [Command],
   leadercommit :: Int
   } | AER {
   term :: Int,
+  source :: String,
   success :: Bool
   } | RVM {
   term :: Int,
+  source :: String,
   candidateId :: !String,
   lastLogIndex :: Int,
   lastLogTerm :: Int
   } | RVR {
   term :: Int,
+  source :: String,
   voteGranted :: Bool
 } deriving (Generic, Show)
 
