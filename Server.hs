@@ -17,6 +17,7 @@ instance FromJSON Command
 
 data ServerState = Follower | Candidate | Leader deriving (Show)
 
+timeoutRange :: (Int, Int)
 timeoutRange = (150, 300) -- ms
 
 -- These (!)s just force strict data types.
@@ -24,7 +25,7 @@ timeoutRange = (150, 300) -- ms
 data Server = Server {
   sState :: !ServerState,
   id :: !String,
-  others :: [String]
+  others :: [String],
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
@@ -42,14 +43,16 @@ data Server = Server {
 
 resetTimeout :: Server -> IO Server
 resetTimeout server = do
-  newTimeout <- getStdRandom $ randomR timeoutRange :: Int
+  newTimeout <- getStdRandom $ randomR timeoutRange
   newStarted <- getCurrentTime
   return server { timeout = newTimeout, started = newStarted }
 
 updateTimeout :: Server -> IO Server
 updateTimeout server = do
-  newStarted <- getCurrenTime
+  newStarted <- getCurrentTime
   return server { started = newStarted }
+
+
 
 
 
