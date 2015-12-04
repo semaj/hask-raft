@@ -12,9 +12,21 @@ import GHC.Generics
 timeoutRange :: (Int, Int)
 timeoutRange = (150, 300) -- ms
 
-type Command = (String, String)
+data CommandType = CGET | CPUT deriving (Show, Generic)
+data Command = Command {
+  ctype :: CommandType,
+  cterm :: Int,
+  creator :: !String,
+  ckey :: !String,
+  cvalue :: !String
+} deriving (Show, Generic)
 
-data MessType = GET | PUT | OK | FAIL | REDIRECT | RAFT deriving (Read)
+instance ToJSON Command
+instance FromJSON Command
+instance ToJSON CommandType
+instance FromJSON CommandType
+
+data MessType = GET | PUT | OK | FAIL | REDIRECT | RAFT deriving (Read, Eq)
 
 instance Show MessType where
   show GET = "get"
@@ -61,27 +73,21 @@ instance ToJSON Message where
 
 data RMessage = AE {
   term :: Int,
-  source :: String,
-  dest :: String,
   leaderId :: !String,
   prevLogIndex :: Int,
+  prevLogTerm :: Int,
   entries :: [Command],
-  leadercommit :: Int
+  leaderCommit :: Int
 } | AER {
   term :: Int,
-  source :: String,
-  dest :: String,
   success :: Bool
 } | RV {
   term :: Int,
-  source :: String,
-  dest :: String,
   candidateId :: !String,
   lastLogIndex :: Int,
   lastLogTerm :: Int
 } | RVR {
   term :: Int,
-  source :: String,
   dest :: String,
   voteGranted :: Bool
 } deriving (Generic, Show)

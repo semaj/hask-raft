@@ -8,11 +8,11 @@ import Data.Aeson
 import Data.Time
 import System.Random
 import Data.HashMap.Lazy
+import Data.Maybe
 
 -- Command (<Key> <Value>) (to put)
 
-data ServerState = Follower | Candidate | Leader deriving (Show)
-
+data ServerState = Follower | Candidate | Leader deriving (Show, Eq)
 
 -- These (!)s just force strict data types.
 -- Nothing to worry about. >:)
@@ -25,7 +25,7 @@ data Server = Server {
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
-  log :: [Command],
+  slog :: [Command],
   -- Volatile state
   commitIndex :: Int,
   lastApplied :: Int,
@@ -57,17 +57,49 @@ maybeTimeout s@Server{..} time
 
 receiveMessage :: Server -> UTCTime -> Maybe Message -> Server
 receiveMessage s _ Nothing = s
-receiveMessage s time (Just m@Message{..}) = s
-    -- where s' = s { lastReceived = time }
+receiveMessage s time (Just m@Message{..})
+  | messType ==  GET = respondGet s' m
+  | messType == PUT = respondPut s' m
+  | messType == RAFT = respondRaft s' m
+  | otherwise = s -- this shouldn't happen
+      where s' = s { lastReceived = time }
     --       responded = respondToMessage s
     --       response = (constructMessage s) <$> (sendMe s')
 
+respondGet :: Server -> Message -> Server
+respondGet s@Server{..} m@Message{..}
+  | sState == Leader = s { slog = append command slog }
+  | otherwise = s { sendMe = append redirect sendMe }
+    where command = Command CGET currentTerm src (fromJust key) ""
+          redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
--- respondToMessage :: Server -> RMessage -> Server
--- respondToMessage s@Server{..} (Just rm)
-  -- | sState == Candidate = reactCandidate s rm
-  -- | sState == Follower = reactFollower s rm
-  -- | sState == Leader = reactLeader s rm
+respondPut :: Server -> Message -> Server
+respondPut s@Server{..} m@Message{..}
+  | sState == Leader = s { slog = append command slog }
+  | otherwise = s { sendMe = append redirect sendMe }
+    where command = Command CPUT currentTerm src (fromJust key) (fromJust value)
+          redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
+
+respondRaft :: Server -> Message -> Server
+respondRaft s@Server{..} m@Message{..}
+  | sState == Follower = respondFollower m rmess
+  | sState == Candidate = respondCandidate m rmess
+  | otherwise = respondCandidate m rmess
+
+respondFollower :: Server -> Messsage -> RMessage -> Server
+respondFollower s@Server{..} m@Message{..} r@AE{..}
+  | term < currentTerm = fail
+  | (length slog - 1) < prevLogIndex = fail
+  | cterm (slog!!prevLogIndex) != prevLogTerm = fail { slog = take toTake slog }
+  -- this is not quite right.
+  | otherwise = succeed { commitIndex = newCommit, slog = slog ++ entries }
+      where aer isSuccess = AER currentTerm isSuccess
+            mAer isSuccess = Message sid src votedFor RAFT mid Nothing Nothing (Just $ aer isSuccess)
+            succeed = s { sendMe = append (mAer True) sendMe }
+            fail = s { sendMe = append (mAer False) sendMe }
+            toTake = (length slog) - (prevLogIndex - 1)
+            newCommit = if leaderCommit > commitIndex then min (length entries - 1) leaderCommit else commitIndex
+
 
 -- reactCandidate :: Server -> RMessage -> Server
 -- reactCandidate s@Server{..} m@RVR{..}
