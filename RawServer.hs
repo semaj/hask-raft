@@ -8,7 +8,7 @@ import Network.Socket
 import System.Environment
 import Control.Exception
 import Data.Aeson
-import Data.ByteString.Lazy.UTF8 (fromString)
+import Data.ByteString.Lazy.UTF8 (fromString, toString)
 import Data.List.Split
 import Control.Concurrent
 import Control.Monad
@@ -43,7 +43,12 @@ getSocket id = do
 serverLoop :: Server -> Chan Message -> Socket -> IO ()
 serverLoop server chan socket = do
   message <- tryGet chan
-  serverLoop server chan socket
+  time <- getCurrentTime
+  unless (isNothing message) $ do putStrLn $ show $ fromJust message
+  let server' = step $ receiveMessage server time message
+  mapM (send socket . toString . encode) $ sendMe server'
+  server'' <- maybeTimeout server' time
+  serverLoop server' chan socket
 
 start :: Server -> Chan Message -> Socket -> IO ()
 start server chan socket = do
@@ -54,8 +59,8 @@ start server chan socket = do
 initialServer :: String -> [String] -> IO Server
 initialServer myID otherIDs = do
   timeout <- getStdRandom $ randomR timeoutRange
-  started <- getCurrentTime
-  return $ Server Candidate myID otherIDs empty 0 "" [] 0 0 [] [] timeout started
+  lastReceived <- getCurrentTime
+  return $ Server Candidate myID otherIDs empty [] 0 "" [] 0 0 [] [] [] timeout lastReceived
 
 main :: IO ()
 main = do

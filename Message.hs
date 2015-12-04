@@ -4,14 +4,17 @@
 {-# LANGUAGE DeriveGeneric #-}
 
 module Message where
-import Server
 import Data.Aeson
 import Data.Char
 import Data.Maybe
 import GHC.Generics
 
-data MessType = GET | PUT | OK | FAIL | REDIRECT |
-                AE | AEResponse | RV | RVResponse deriving (Read)
+timeoutRange :: (Int, Int)
+timeoutRange = (150, 300) -- ms
+
+type Command = (String, String)
+
+data MessType = GET | PUT | OK | FAIL | REDIRECT | RAFT deriving (Read)
 
 instance Show MessType where
   show GET = "get"
@@ -19,10 +22,7 @@ instance Show MessType where
   show OK = "ok"
   show FAIL = "fail"
   show REDIRECT = "redirect"
-  show AE = "AE"
-  show AEResponse = "AEResponse"
-  show RV = "RV"
-  show RVResponse = "RVResponse"
+  show RAFT = "RAFT"
 
 data Message = Message {
   src :: !String,
@@ -59,26 +59,30 @@ instance ToJSON Message where
     "value"  .= value,
     "rmess"  .= rmess ]
 
-data RMessage = AEM {
+data RMessage = AE {
   term :: Int,
   source :: String,
+  dest :: String,
   leaderId :: !String,
   prevLogIndex :: Int,
   entries :: [Command],
   leadercommit :: Int
-  } | AER {
+} | AER {
   term :: Int,
   source :: String,
+  dest :: String,
   success :: Bool
-  } | RVM {
+} | RV {
   term :: Int,
   source :: String,
+  dest :: String,
   candidateId :: !String,
   lastLogIndex :: Int,
   lastLogTerm :: Int
-  } | RVR {
+} | RVR {
   term :: Int,
   source :: String,
+  dest :: String,
   voteGranted :: Bool
 } deriving (Generic, Show)
 

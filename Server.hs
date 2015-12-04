@@ -3,26 +3,25 @@
 {-# LANGUAGE RecordWildCards #-}
 
 module Server where
+import Message
 import Data.Aeson
 import Data.Time
 import System.Random
 import Data.HashMap.Lazy
 
-type Command = (String, String)
 -- Command (<Key> <Value>) (to put)
 
 data ServerState = Follower | Candidate | Leader deriving (Show)
 
-timeoutRange :: (Int, Int)
-timeoutRange = (150, 300) -- ms
 
 -- These (!)s just force strict data types.
 -- Nothing to worry about. >:)
 data Server = Server {
   sState :: !ServerState,
-  id :: !String,
+  sid :: !String,
   others :: [String],
   store :: HashMap String String,
+  sendMe :: [Message],
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
@@ -34,50 +33,74 @@ data Server = Server {
   nextIndices :: [Int],
   matchIndices :: [Int],
   -- Only on candidates
-  votes :: [Int]
+  votes :: [Int],
   --
-  timeout :: Int, -- seconds
-  started :: UTCTime
+  timeout :: Int, -- ms
+  lastReceived :: UTCTime
 }
 
-respondToMessage :: Server -> UTCTime -> Maybe Message -> Server
-respondToMessage s _ Nothing = s
-respondToMessage s@Server{..} time (Just m)
-  | sState == Candidate = reactCandidate s' m
-  | sState == Follower = reactFollower s' m
-  | sState == Leader = reactLeader s' m
-    where s' = s { started = time }
+append :: a -> [a] -> [a]
+append a as = as ++ [a]
 
-reactCandidate :: Server -> Message -> Server
-reactCandidate s@Server{..} m@RVR{..}
-  | voteGranted == True = s { votes = source:votes }
-  | otherwise = s
-reactCandidate s@Server{..} m@AEM{..}
-  | term >= currentTerm = toFollower s source
-  | otherwise = s
-reactCandidate s _ = s
+step :: Server -> Server
+step = id
 
-toFollower :: Server -> String -> Server
-toFollower s ss = s
--- possible optimization here: if receive a RVM, check the term. if it's higher
--- or the same (and there are more votes, add this field) then they are the leader
+isExpired :: UTCTime -> UTCTime -> Int -> Bool
+isExpired lastReceived now timeout = diff > timeout'
+  where timeout' = 0.001 * realToFrac timeout
+        diff = abs $ diffUTCTime now lastReceived
 
-reactFollower :: Server -> Message -> Server
-reactFollower s@Server{..} m@Message{..} = undefined
+maybeTimeout :: Server -> UTCTime -> IO Server
+maybeTimeout s@Server{..} time
+  | isExpired lastReceived time timeout = resetTimeout s
+  | otherwise = return s
 
-reactLeader :: Server -> Message -> Server
-reactLeader s@Server{..} m@Message{..} = undefined
+receiveMessage :: Server -> UTCTime -> Maybe Message -> Server
+receiveMessage s _ Nothing = s
+receiveMessage s time (Just m@Message{..}) = s
+    -- where s' = s { lastReceived = time }
+    --       responded = respondToMessage s
+    --       response = (constructMessage s) <$> (sendMe s')
+
+
+-- respondToMessage :: Server -> RMessage -> Server
+-- respondToMessage s@Server{..} (Just rm)
+  -- | sState == Candidate = reactCandidate s rm
+  -- | sState == Follower = reactFollower s rm
+  -- | sState == Leader = reactLeader s rm
+
+-- reactCandidate :: Server -> RMessage -> Server
+-- reactCandidate s@Server{..} m@RVR{..}
+--   | voteGranted == True = s { votes = source:votes }
+--   | otherwise = s
+-- reactCandidate s@Server{..} m@AEM{..}
+--   | term >= currentTerm = toFollower s source
+--   | otherwise = s
+-- reactCandidate s _ = s
+-- -- possible optimization here: if receive a RVM, check the term. if it's higher
+-- -- or the same (and there are more votes, add this field) then they are the leader
+
+-- toFollower :: Server -> String -> Server
+-- toFollower s ss = s
+
+-- reactFollower :: Server -> RMessage -> Server
+-- reactFollower s@Server{..} m@AEM{..} = s -- unimplemented
+-- reactFollower s@Server{..} m@RVM{..}
+--   |
+
+-- reactLeader :: Server -> RMessage -> Server
+-- reactLeader s@Server{..} m@RMessage{..} = undefined
 
 resetTimeout :: Server -> IO Server
 resetTimeout server = do
   newTimeout <- getStdRandom $ randomR timeoutRange
   newStarted <- getCurrentTime
-  return server { timeout = newTimeout, started = newStarted }
+  return server { timeout = newTimeout, lastReceived = newStarted }
 
 updateTimeout :: Server -> IO Server
 updateTimeout server = do
   newStarted <- getCurrentTime
-  return server { started = newStarted }
+  return server { lastReceived = newStarted }
 
 
 
