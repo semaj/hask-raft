@@ -31,6 +31,8 @@ receiver :: Socket -> Chan Message -> IO ()
 receiver s messages = do
   forever $ do
     msg <- recv s 4096
+    putStrLn "MESSAGE!"
+    putStrLn msg
     let splitR = splitOn "\n" msg
         mMessages = map (decode . fromString) splitR :: [Maybe Message]
     writeList2Chan messages $ catMaybes mMessages
@@ -49,9 +51,13 @@ serverLoop server chan socket = do
   newMid <- getStdRandom $ randomR (100000, 999999)
   unless (isNothing message) $ do putStrLn $ show $ fromJust message
   let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
-  putStrLn $ show $ server'
-  mapM (send socket . toString . encode) $ sendMe server'
-  serverLoop server' chan socket
+  putStrLn $ show server'
+  unless ((length $ sendMe server') == 0) $ do
+    let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
+    -- putStrLn $ show mapped
+    void $ mapM (send socket) mapped
+  threadDelay 1000
+  serverLoop (server' { sendMe = [] } ) chan socket
 
 start :: Server -> Chan Message -> Socket -> IO ()
 start server chan socket = do

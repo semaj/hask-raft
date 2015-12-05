@@ -7,6 +7,7 @@ import Message
 import Data.Aeson
 import Data.Time
 import System.Random
+import Debug.Trace
 import qualified Data.HashMap.Lazy as HM
 import qualified Data.HashSet as HS
 import Data.Maybe
@@ -81,7 +82,7 @@ stepCandidate newMid s@Server{..}
   | otherwise = s { sendMe = append rv sendMe } -- could avoid sending to those already voted for us
     where lastLogIndex = if length slog == 0 then 0 else length slog - 1
           lastLogTerm = if length slog == 0 then 0 else cterm $ last slog
-          rv = Message sid "FFFF" "" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
+          rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
 stepLeader :: String -> Server -> Server
 stepLeader newMid s@Server{..} = s
@@ -99,6 +100,7 @@ receiveMessage s@Server{..} time newTimeout Nothing
                                               votes = HS.empty,
                                               currentTerm = currentTerm + 1 }
   | otherwise = s
+receiveMessage _ _ _ m | trace (show m) False = undefined
 receiveMessage s time _ (Just m@Message{..})
   | messType ==  GET = respondGet s' m
   | messType == PUT = respondPut s' m
@@ -140,7 +142,7 @@ respondFollower s@Server{..} m@Message{..} r@RV{..}
                                                  votedFor = candidateId,
                                                  currentTerm = term }
   | otherwise = s { sendMe = append (mRvr False) sendMe }
-    where mRvr isSuccess = Message sid src votedFor RAFT mid Nothing Nothing (Just $ RVR currentTerm isSuccess)
+    where mRvr isSuccess = Message sid src (if isSuccess then src else "FFFF") RAFT mid Nothing Nothing (Just $ RVR (if isSuccess then term else currentTerm) isSuccess)
 respondFollower s _ _ = s
 
 -- respondFollower s@Server{..} m@Message{..} r@AE{..}
