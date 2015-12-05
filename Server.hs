@@ -7,7 +7,8 @@ import Message
 import Data.Aeson
 import Data.Time
 import System.Random
-import Data.HashMap.Lazy
+import Data.HashMap.Lazy as HM
+import Data.HashSet as HS
 import Data.Maybe
 
 -- Command (<Key> <Value>) (to put)
@@ -33,7 +34,7 @@ data Server = Server {
   nextIndices :: [Int],
   matchIndices :: [Int],
   -- Only on candidates
-  votes :: [Int],
+  votes :: HashSet String,
   --
   timeout :: Int, -- ms
   lastReceived :: UTCTime
@@ -61,7 +62,7 @@ receiveMessage s time (Just m@Message{..})
   | messType ==  GET = respondGet s' m
   | messType == PUT = respondPut s' m
   | messType == RAFT = respondRaft s' m
-  | otherwise = s -- this shouldn't happen
+  | otherwise = s
       where s' = s { lastReceived = time }
     --       responded = respondToMessage s
     --       response = (constructMessage s) <$> (sendMe s')
@@ -82,46 +83,51 @@ respondPut s@Server{..} m@Message{..}
 
 respondRaft :: Server -> Message -> Server
 respondRaft s@Server{..} m@Message{..}
-  | sState == Follower = respondFollower m rmess
-  | sState == Candidate = respondCandidate m rmess
-  | otherwise = respondCandidate m rmess
+  | sState == Follower = respondFollower s m $ fromJust rmess
+  | sState == Candidate = respondCandidate s m $ fromJust rmess
+  | otherwise = respondLeader s m $ fromJust rmess
 
-respondFollower :: Server -> Messsage -> RMessage -> Server
-respondFollower s@Server{..} m@Message{..} r@AE{..}
-  | term < currentTerm = fail
-  | (length slog - 1) < prevLogIndex = fail
-  | cterm (slog!!prevLogIndex) != prevLogTerm = fail { slog = take toTake slog }
-  -- this is not quite right.
-  | otherwise = succeed { commitIndex = newCommit, slog = slog ++ entries }
-      where aer isSuccess = AER currentTerm isSuccess
-            mAer isSuccess = Message sid src votedFor RAFT mid Nothing Nothing (Just $ aer isSuccess)
-            succeed = s { sendMe = append (mAer True) sendMe }
-            fail = s { sendMe = append (mAer False) sendMe }
-            toTake = (length slog) - (prevLogIndex - 1)
-            newCommit = if leaderCommit > commitIndex then min (length entries - 1) leaderCommit else commitIndex
+upToDate :: [Command] -> Int -> Int -> Bool
+upToDate [] _ _ = True
+upToDate base lastLogTerm lastLogIndex = baseTI <= (lastLogTerm, lastLogIndex)
+    where baseTI = (cterm $ last base, length base)
 
+respondFollower :: Server -> Message -> RMessage -> Server
+respondFollower s@Server{..} m@Message{..} r@RV{..}
+  | term <= currentTerm = s { sendMe = append (mRvr False) sendMe }
+  | upToDate slog lastLogTerm lastLogIndex = s { sendMe = append (mRvr True) sendMe,
+                                                 votedFor = candidateId,
+                                                 currentTerm = term }
+  | otherwise = s { sendMe = append (mRvr False) sendMe }
+    where mRvr isSuccess = Message sid src votedFor RAFT mid Nothing Nothing (Just $ RVR currentTerm isSuccess)
+respondFollower s _ _ = s
 
--- reactCandidate :: Server -> RMessage -> Server
--- reactCandidate s@Server{..} m@RVR{..}
---   | voteGranted == True = s { votes = source:votes }
---   | otherwise = s
--- reactCandidate s@Server{..} m@AEM{..}
---   | term >= currentTerm = toFollower s source
---   | otherwise = s
--- reactCandidate s _ = s
--- -- possible optimization here: if receive a RVM, check the term. if it's higher
--- -- or the same (and there are more votes, add this field) then they are the leader
+-- respondFollower s@Server{..} m@Message{..} r@AE{..}
+--   | term < currentTerm = fail
+--   | (length slog - 1) < prevLogIndex = fail
+--   | cterm (slog!!prevLogIndex) != prevLogTerm = fail { slog = take toTake slog }
+--   -- this is not quite right.
+--   | otherwise = succeed { commitIndex = newCommit, slog = slog ++ entries }
+--       where aer isSuccess = AER currentTerm isSuccess
+--             mAer isSuccess = Message sid src votedFor RAFT mid Nothing Nothing (Just $ aer isSuccess)
+--             succeed = s { sendMe = append (mAer True) sendMe }
+--             fail = s { sendMe = append (mAer False) sendMe }
+--             toTake = (length slog) - (prevLogIndex - 1)
+--             newCommit = if leaderCommit > commitIndex then min (length entries - 1) leaderCommit else commitIndex
 
--- toFollower :: Server -> String -> Server
--- toFollower s ss = s
+respondLeader :: Server -> Message -> RMessage -> Server
+respondLeader s@Server{..} m@Message{..} _ = s
 
--- reactFollower :: Server -> RMessage -> Server
--- reactFollower s@Server{..} m@AEM{..} = s -- unimplemented
--- reactFollower s@Server{..} m@RVM{..}
---   |
-
--- reactLeader :: Server -> RMessage -> Server
--- reactLeader s@Server{..} m@RMessage{..} = undefined
+respondCandidate :: Server -> Message -> RMessage -> Server
+respondCandidate s@Server{..} m@Message{..} r@RVR{..}
+  | voteGranted == True = s { votes = HS.insert src votes }
+  | otherwise = s
+respondCandidate s@Server{..} m@Message{..} r@AE{..}
+  | term >= currentTerm = s { sState = Follower,
+                             currentTerm = term,
+                             votedFor = src }
+  | otherwise = s
+respondCandidate s _ _ = s
 
 resetTimeout :: Server -> IO Server
 resetTimeout server = do

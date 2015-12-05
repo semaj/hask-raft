@@ -88,7 +88,6 @@ data RMessage = AE {
   lastLogTerm :: Int
 } | RVR {
   term :: Int,
-  dest :: String,
   voteGranted :: Bool
 } deriving (Generic, Show)
 
