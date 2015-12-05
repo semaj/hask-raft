@@ -7,11 +7,9 @@ import Message
 import Data.Aeson
 import Data.Time
 import System.Random
-import Data.HashMap.Lazy as HM
-import Data.HashSet as HS
+import qualified Data.HashMap.Lazy as HM
+import qualified Data.HashSet as HS
 import Data.Maybe
-
--- Command (<Key> <Value>) (to put)
 
 data ServerState = Follower | Candidate | Leader deriving (Show, Eq)
 
@@ -21,7 +19,7 @@ data Server = Server {
   sState :: !ServerState,
   sid :: !String,
   others :: [String],
-  store :: HashMap String String,
+  store :: HM.HashMap String String,
   sendMe :: [Message],
   -- Persistent state
   currentTerm :: Int,
@@ -31,34 +29,73 @@ data Server = Server {
   commitIndex :: Int,
   lastApplied :: Int,
   -- Only on leaders
-  nextIndices :: [Int],
-  matchIndices :: [Int],
+  nextIndices :: HM.HashMap String Int,
+  matchIndices :: HM.HashMap String Int,
   -- Only on candidates
-  votes :: HashSet String,
+  votes :: HS.HashSet String,
   --
   timeout :: Int, -- ms
   lastReceived :: UTCTime
 }
 
+initServer :: String -> [String] -> UTCTime -> Int -> Server
+initServer myID otherIDs time timeout = Server { sid = myID,
+                                                 others = otherIDs,
+                                                 sState = Follower,
+                                                 store = HM.empty,
+                                                 sendMe = [],
+                                                 currentTerm = 0,
+                                                 votedFor = "",
+                                                 slog = [],
+                                                 commitIndex = 0,
+                                                 lastApplied = 0,
+                                                 nextIndices = HM.fromList $ map (flip (,) $ 0) otherIDs,
+                                                 matchIndices = HM.fromList $ map (flip (,) $ 0) otherIDs,
+                                                 votes = HS.empty,
+                                                 timeout = timeout,
+                                                 lastReceived = time }
+
+
+majority :: Int
+majority = 3
+
 append :: a -> [a] -> [a]
 append a as = as ++ [a]
 
 step :: Server -> Server
-step = id
+step s@Server{..}
+  | sState == Follower = stepFollower s
+  | sState == Candidate = stepCandidate s
+  | sState == Leader = stepLeader s
+
+stepFollower :: Server -> Server
+stepFollower s@Server{..} = s
+
+stepCandidate :: Server -> Server
+stepCandidate s@Server{..}
+  | HS.size votes >= majority = s { sState = Leader,
+                                   votedFor = sid,
+                                   nextIndices = HM.map (const $ length slog) nextIndices,
+                                   matchIndices = HM.map (const 0) matchIndices,
+                                   votes = HS.empty }
+  | otherwise = s
+
+stepLeader :: Server -> Server
+stepLeader s@Server{..} = s
 
 isExpired :: UTCTime -> UTCTime -> Int -> Bool
 isExpired lastReceived now timeout = diff > timeout'
   where timeout' = 0.001 * realToFrac timeout
         diff = abs $ diffUTCTime now lastReceived
 
-maybeTimeout :: Server -> UTCTime -> IO Server
-maybeTimeout s@Server{..} time
-  | isExpired lastReceived time timeout = resetTimeout s
-  | otherwise = return s
-
-receiveMessage :: Server -> UTCTime -> Maybe Message -> Server
-receiveMessage s _ Nothing = s
-receiveMessage s time (Just m@Message{..})
+receiveMessage :: Server -> UTCTime -> Int -> Maybe Message -> Server
+receiveMessage s@Server{..} time newTimeout Nothing
+  | isExpired lastReceived time timeout = s { sState = Candidate,
+                                              timeout = newTimeout,
+                                              lastReceived = time,
+                                              votes = HS.empty }
+  | otherwise = s
+receiveMessage s time _ (Just m@Message{..})
   | messType ==  GET = respondGet s' m
   | messType == PUT = respondPut s' m
   | messType == RAFT = respondRaft s' m
@@ -128,21 +165,4 @@ respondCandidate s@Server{..} m@Message{..} r@AE{..}
                              votedFor = src }
   | otherwise = s
 respondCandidate s _ _ = s
-
-resetTimeout :: Server -> IO Server
-resetTimeout server = do
-  newTimeout <- getStdRandom $ randomR timeoutRange
-  newStarted <- getCurrentTime
-  return server { timeout = newTimeout, lastReceived = newStarted }
-
-updateTimeout :: Server -> IO Server
-updateTimeout server = do
-  newStarted <- getCurrentTime
-  return server { lastReceived = newStarted }
-
-
-
-
-
-
 

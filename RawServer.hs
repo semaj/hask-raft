@@ -15,8 +15,8 @@ import Control.Monad
 import Data.Maybe
 import System.Random
 import Data.Time
-import Data.HashMap.Lazy as HM hiding (map)
-import Data.HashSet as HS hiding (map)
+import qualified Data.HashMap.Lazy as HM
+import qualified Data.HashSet as HS
 
 tryGet :: Chan a -> IO (Maybe a)
 tryGet chan = do
@@ -45,10 +45,11 @@ serverLoop :: Server -> Chan Message -> Socket -> IO ()
 serverLoop server chan socket = do
   message <- tryGet chan
   time <- getCurrentTime
+  possibleTimeout <- getStdRandom $ randomR timeoutRange
   unless (isNothing message) $ do putStrLn $ show $ fromJust message
-  let server' = step $ receiveMessage server time message
+  let server' = step $ receiveMessage server time possibleTimeout message
   mapM (send socket . toString . encode) $ sendMe server'
-  server'' <- maybeTimeout server' time
+  -- timedOutServer <- maybeTimeout server' time
   serverLoop server' chan socket
 
 start :: Server -> Chan Message -> Socket -> IO ()
@@ -61,7 +62,7 @@ initialServer :: String -> [String] -> IO Server
 initialServer myID otherIDs = do
   timeout <- getStdRandom $ randomR timeoutRange
   lastReceived <- getCurrentTime
-  return $ Server Candidate myID otherIDs HM.empty [] 0 "" [] 0 0 [] [] HS.empty timeout lastReceived
+  return $ initServer myID otherIDs lastReceived timeout
 
 main :: IO ()
 main = do
