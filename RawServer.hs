@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 import Message
@@ -34,7 +33,11 @@ receiver s messages = do
     putStrLn "MESSAGE!"
     putStrLn msg
     let splitR = splitOn "\n" msg
-        mMessages = map (decode . fromString) splitR :: [Maybe Message]
+    putStrLn $ "split: " ++ (show splitR)
+    let fsMessages = map fromString splitR
+    putStrLn $ "fsm: " ++ (show fsMessages)
+    let mMessages = map decode fsMessages :: [Maybe Message]
+    putStrLn $ "mmess: " ++ (show mMessages)
     writeList2Chan messages $ catMaybes mMessages
 
 getSocket :: String -> IO Socket
