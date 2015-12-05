@@ -36,7 +36,7 @@ data Server = Server {
   --
   timeout :: Int, -- ms
   lastReceived :: UTCTime
-}
+} deriving (Show)
 
 initServer :: String -> [String] -> UTCTime -> Int -> Server
 initServer myID otherIDs time timeout = Server { sid = myID,
@@ -57,31 +57,34 @@ initServer myID otherIDs time timeout = Server { sid = myID,
 
 
 majority :: Int
-majority = 3
+majority = 2 -- because 1 is always implied (1 + 2)
 
 append :: a -> [a] -> [a]
 append a as = as ++ [a]
 
-step :: Server -> Server
-step s@Server{..}
-  | sState == Follower = stepFollower s
-  | sState == Candidate = stepCandidate s
-  | sState == Leader = stepLeader s
+step :: String -> Server -> Server
+step newMid s@Server{..}
+  | sState == Follower = stepFollower newMid s
+  | sState == Candidate = stepCandidate newMid s
+  | sState == Leader = stepLeader newMid s
 
-stepFollower :: Server -> Server
-stepFollower s@Server{..} = s
+stepFollower :: String -> Server -> Server
+stepFollower newMid s@Server{..} = s
 
-stepCandidate :: Server -> Server
-stepCandidate s@Server{..}
+stepCandidate :: String -> Server -> Server
+stepCandidate newMid s@Server{..}
   | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
                                    nextIndices = HM.map (const $ length slog) nextIndices,
                                    matchIndices = HM.map (const 0) matchIndices,
                                    votes = HS.empty }
-  | otherwise = s
+  | otherwise = s { sendMe = append rv sendMe } -- could avoid sending to those already voted for us
+    where lastLogIndex = if length slog == 0 then 0 else length slog - 1
+          lastLogTerm = if length slog == 0 then 0 else cterm $ last slog
+          rv = Message sid "FFFF" "" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
-stepLeader :: Server -> Server
-stepLeader s@Server{..} = s
+stepLeader :: String -> Server -> Server
+stepLeader newMid s@Server{..} = s
 
 isExpired :: UTCTime -> UTCTime -> Int -> Bool
 isExpired lastReceived now timeout = diff > timeout'
@@ -93,7 +96,8 @@ receiveMessage s@Server{..} time newTimeout Nothing
   | isExpired lastReceived time timeout = s { sState = Candidate,
                                               timeout = newTimeout,
                                               lastReceived = time,
-                                              votes = HS.empty }
+                                              votes = HS.empty,
+                                              currentTerm = currentTerm + 1 }
   | otherwise = s
 receiveMessage s time _ (Just m@Message{..})
   | messType ==  GET = respondGet s' m

@@ -46,10 +46,11 @@ serverLoop server chan socket = do
   message <- tryGet chan
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
+  newMid <- getStdRandom $ randomR (100000, 999999)
   unless (isNothing message) $ do putStrLn $ show $ fromJust message
-  let server' = step $ receiveMessage server time possibleTimeout message
+  let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
+  putStrLn $ show $ server'
   mapM (send socket . toString . encode) $ sendMe server'
-  -- timedOutServer <- maybeTimeout server' time
   serverLoop server' chan socket
 
 start :: Server -> Chan Message -> Socket -> IO ()
