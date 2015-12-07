@@ -1,7 +1,7 @@
 main : configure kvstore
 
 configure :
-	cabal update && cabal install network aeson utf8-string random
+	cabal update && cabal install network aeson-0.9.0.1 utf8-string random
 
 kvstore :
 	ghc RawServer.hs -o 3700kvstore
