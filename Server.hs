@@ -51,7 +51,7 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  votedFor = "FFFF",
                                                  slog = [],
                                                  commitIndex = -1,
-                                                 lastApplied = 0,
+                                                 lastApplied = -1,
                                                  nextIndices = HM.fromList $ map (\x -> (x, 0)) otherIDs,
                                                  matchIndices = HM.fromList $ map (\x -> (x, 0)) otherIDs,
                                                  votes = HS.empty,
@@ -101,8 +101,8 @@ leaderSendAEs newMid now s@Server{..}
 heartbeat :: String -> Server -> (String, Int) -> Message
 heartbeat newMid s@Server{..} (dest, nextIndex) = message
   where commandsSend = if nextIndex == length slog then [] else drop nextIndex slog
-        prevLogIndex = if nextIndex == 0 then nextIndex else nextIndex - 1
-        prevLogTerm = if nextIndex == 0 then 0 else cterm $ (slog!!(nextIndex - 1))
+        prevLogIndex = nextIndex - 1 --if nextIndex == 0 then nextIndex else nextIndex - 1
+        prevLogTerm = if nextIndex <= 0 then 0 else cterm $ (slog!!(nextIndex - 1))
         rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
         message = Message sid dest sid RAFT (newMid ++ dest) Nothing Nothing rmessage
 
@@ -187,13 +187,13 @@ respondFollower s@Server{..} m@Message{..} r@RV{..}
   | upToDate slog lastLogTerm lastLogIndex = s { sendMe = push (mRvr True) sendMe,
                                                  votedFor = candidateId,
                                                  currentTerm = term }
-  | otherwise = s { sendMe = push (mRvr False) sendMe }
+  | otherwise = s { sendMe = push (mRvr False) sendMe } -- should we update the term anyway?
     where mRvr isSuccess = Message sid src (if isSuccess then candidateId else votedFor) RAFT mid Nothing Nothing (Just $ RVR (if isSuccess then term else currentTerm) isSuccess)
 
 respondFollower s@Server{..} m@Message{..} r@AE{..}
   | term < currentTerm = reject
-  | prevLogIndex == 0 = succeed
-  | (length slog /= prevLogIndex + 1) = inconsistent
+  | (length slog <= prevLogIndex + 1) = inconsistent
+  | prevLogIndex <= 0 = succeed
   | (cterm $ (slog!!prevLogIndex)) /= prevLogTerm = inconsistent { slog = deleteSlog }
   | otherwise = succeed
     where mReject = Message sid src votedFor RAFT mid Nothing Nothing $ Just $ AER currentTerm (-1) False
@@ -216,10 +216,9 @@ respondLeader s@Server{..} m@Message{..} r@AE{..}
   | otherwise = s
 
 respondLeader s@Server{..} m@Message{..} r@AER{..}
-  | success == False = s { nextIndices = adjustedNext subtract }
-  | success == True =  s { nextIndices = adjustedNext (+), matchIndices = updateMatched }
-    where adjustedNext subOrAdd = HM.adjust (subOrAdd 1) src nextIndices
-          updateMatched = HM.adjust (const lastIndex) src matchIndices
+  | success == False = s { nextIndices = HM.adjust (subtract 1) src nextIndices }
+  | success == True =  s { nextIndices = HM.insert src (lastIndex + 1) nextIndices,
+                          matchIndices = HM.insert src lastIndex matchIndices }
 
 respondLeader s@Server{..} m@Message{..} _ = s
 

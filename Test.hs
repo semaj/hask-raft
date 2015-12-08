@@ -29,13 +29,13 @@ main = do
         let withNextIndices = leader { nextIndices = HM.fromList [("a", 4)],
                                        matchIndices = HM.fromList [("a", 2)] }
             aer1 = AER 1 (-1) False
-            aer2 = AER 1 5 True
+            aer2 = AER 1 6 True
             mess1 = Message "a" "S" "S" RAFT "1234" Nothing Nothing (Just aer1)
             mess2 = Message "a" "S" "S" RAFT "2345" Nothing Nothing (Just aer2)
             responded1 = respondLeader withNextIndices mess1 aer1
             responded2 = respondLeader withNextIndices mess2 aer2
         (HM.toList $ nextIndices responded1) `shouldBe` [("a", 3)]
-        (HM.toList $ nextIndices responded2) `shouldBe` [("a", 5)]
-        (HM.toList $ matchIndices responded2) `shouldBe` [("a", 5)]
+        (HM.toList $ nextIndices responded2) `shouldBe` [("a", 7)]
+        (HM.toList $ matchIndices responded2) `shouldBe` [("a", 6)]
 
 
