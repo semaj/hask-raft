@@ -86,14 +86,21 @@ stepCandidate newMid s@Server{..}
           rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
 stepLeader :: String -> Server -> Server
-stepLeader newMid s@Server{..} = s-- { sendMe = append heartBeat sendMe }
--- there should be a cooldown on sending messages
-  -- where prevLogIndex = if length slog == 0 then 0 else length slog - 1
-  --       prevLogTerm = if length slog == 0 then 0 else cterm $ last slog
-  --       heartBeat = Message sid "FFFF" sid RAFT newMid Nothing Nothing $ Just $ AE currentTerm sid
+stepLeader newMid s@Server{..} = leaderSendAEs newMid $ leaderExecute s
 
+-- Get the AEs needed to send for the next round
 leaderSendAEs :: String -> Server -> Server
-leaderSendAEs newMid s@Server{..} = s
+leaderSendAEs newMid s@Server{..} = s { sendMe = sendMe ++ toFollowers }
+  where toFollowers = map (heartbeat newMid s) $ HM.toList nextIndices
+
+-- For a given other server, get the AE they need
+heartbeat :: String -> Server -> (String, Int) -> Message
+heartbeat newMid s@Server{..} (dest, nextIndex) = message
+  where commandsSend = if nextIndex == length slog then [] else drop nextIndex slog
+        prevLogIndex = nextIndex - 1
+        prevLogTerm = if length slog == 0 then 0 else cterm $ (slog!!(nextIndex - 1))
+        rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
+        message = Message sid dest sid RAFT (newMid ++ dest) Nothing Nothing rmessage
 
 -- Leader executes the committed commands in its log and prepares the responses
 -- to external clients these produce. Updates commitIndex
