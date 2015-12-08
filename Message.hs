@@ -12,11 +12,12 @@ import GHC.Generics
 timeoutRange :: (Int, Int)
 timeoutRange = (150, 300) -- ms
 
-data CommandType = CGET | CPUT deriving (Show, Generic)
+data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {
   ctype :: CommandType,
   cterm :: Int,
   creator :: !String,
+  cmid :: !String,
   ckey :: !String,
   cvalue :: !String
 } deriving (Show, Generic)
@@ -80,6 +81,7 @@ data RMessage = AE {
   leaderCommit :: Int
 } | AER {
   term :: Int,
+  lastIndex :: Int,
   success :: Bool
 } | RV {
   term :: Int,
