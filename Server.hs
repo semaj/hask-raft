@@ -59,12 +59,11 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  lastReceived = time,
                                                  lastSent = time }
 
-
 majority :: Int
 majority = 2 -- because 1 is always implied (1 + 2)
 
-append :: a -> [a] -> [a]
-append a as = as ++ [a]
+push :: a -> [a] -> [a]
+push a as = as ++ [a]
 
 step :: String -> Server -> Server
 step newMid s@Server{..}
@@ -82,7 +81,7 @@ stepCandidate newMid s@Server{..}
                                    nextIndices = HM.map (const $ length slog) nextIndices,
                                    matchIndices = HM.map (const 0) matchIndices,
                                    votes = HS.empty }
-  | otherwise = s { sendMe = append rv sendMe } -- could avoid sending to those already voted for us
+  | otherwise = s { sendMe = push rv sendMe } -- could avoid sending to those already voted for us
     where lastLogIndex = if length slog == 0 then 0 else length slog - 1
           lastLogTerm = if length slog == 0 then 0 else cterm $ last slog
           rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
@@ -100,7 +99,7 @@ leaderSendAEs newMid s@Server{..} = s { sendMe = sendMe ++ toFollowers }
 heartbeat :: String -> Server -> (String, Int) -> Message
 heartbeat newMid s@Server{..} (dest, nextIndex) = message
   where commandsSend = if nextIndex == length slog then [] else drop nextIndex slog
-        prevLogIndex = nextIndex - 1
+        prevLogIndex = if nextIndex == 0 then nextIndex else nextIndex - 1
         prevLogTerm = if nextIndex == 0 then 0 else cterm $ (slog!!(nextIndex - 1))
         rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
         message = Message sid dest sid RAFT (newMid ++ dest) Nothing Nothing rmessage
@@ -119,8 +118,8 @@ leaderExecute s@Server{..}
 execute :: Server -> [Command] -> Server
 execute s [] = s
 execute s@Server{..} (Command{..}:cs)
-  | ctype == CGET = execute s { sendMe = append (message (Just ckey) get) sendMe } cs
-  | ctype == CPUT = execute s { sendMe = append (message (Just ckey) (Just cvalue)) sendMe, store = newStore } cs
+  | ctype == CGET = execute s { sendMe = push (message (Just ckey) get) sendMe } cs
+  | ctype == CPUT = execute s { sendMe = push (message (Just ckey) (Just cvalue)) sendMe, store = newStore } cs
     where get = HM.lookup ckey store
           newStore = HM.insert ckey cvalue store -- lazy eval ftw
           message k v = Message sid creator sid (if isNothing v then FAIL else OK) cmid k v Nothing
@@ -152,19 +151,19 @@ receiveMessage s time _ (Just m@Message{..})
   | otherwise = s
       where s' = s { lastReceived = time }
 
--- If we aren't the leader, redirect to it. If we are, append this to our log.
+-- If we aren't the leader, redirect to it. If we are, push this to our log.
 respondGet :: Server -> Message -> Server
 respondGet s@Server{..} m@Message{..}
-  | sState == Leader = s { slog = append command slog }
-  | otherwise = s { sendMe = append redirect sendMe }
+  | sState == Leader = s { slog = push command slog }
+  | otherwise = s { sendMe = push redirect sendMe }
     where command = Command CGET currentTerm src mid (fromJust key) ""
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
--- If we aren't the leader, redirect. If we are, append to log
+-- If we aren't the leader, redirect. If we are, push to log
 respondPut :: Server -> Message -> Server
 respondPut s@Server{..} m@Message{..}
-  | sState == Leader = s { slog = append command slog }
-  | otherwise = s { sendMe = append redirect sendMe }
+  | sState == Leader = s { slog = push command slog }
+  | otherwise = s { sendMe = push redirect sendMe }
     where command = Command CPUT currentTerm src mid (fromJust key) (fromJust value)
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
@@ -181,17 +180,32 @@ upToDate [] _ _ = True
 upToDate base lastLogTerm lastLogIndex = baseTI <= (lastLogTerm, lastLogIndex)
     where baseTI = (cterm $ last base, length base)
 
+
 respondFollower :: Server -> Message -> RMessage -> Server
 respondFollower s@Server{..} m@Message{..} r@RV{..}
-  | term < currentTerm = s { sendMe = append (mRvr False) sendMe }
-  | upToDate slog lastLogTerm lastLogIndex = s { sendMe = append (mRvr True) sendMe,
+  | term < currentTerm = s { sendMe = push (mRvr False) sendMe }
+  | upToDate slog lastLogTerm lastLogIndex = s { sendMe = push (mRvr True) sendMe,
                                                  votedFor = candidateId,
                                                  currentTerm = term }
-  | otherwise = s { sendMe = append (mRvr False) sendMe }
+  | otherwise = s { sendMe = push (mRvr False) sendMe }
     where mRvr isSuccess = Message sid src (if isSuccess then candidateId else votedFor) RAFT mid Nothing Nothing (Just $ RVR (if isSuccess then term else currentTerm) isSuccess)
+
 respondFollower s@Server{..} m@Message{..} r@AE{..}
-  | term >= currentTerm = s { currentTerm = term, votedFor = src }
-  | otherwise = s
+  | term < currentTerm = reject
+  | prevLogIndex == 0 = succeed
+  | (length slog /= prevLogIndex + 1) = inconsistent
+  | (cterm $ (slog!!prevLogIndex)) /= prevLogTerm = inconsistent { slog = deleteSlog }
+  | otherwise = succeed
+    where mReject = Message sid src votedFor RAFT mid Nothing Nothing $ Just $ AER currentTerm (-1) False
+          reject = s { sendMe = push mReject sendMe }
+          mIncons = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (-1) False
+          inconsistent = s { votedFor = src, currentTerm = term, sendMe = push mIncons sendMe }
+          deleteSlog = take prevLogIndex slog
+          addSlog = slog ++ entries
+          newCommitIndex = if leaderCommit > commitIndex then min leaderCommit (prevLogIndex + length entries) else commitIndex
+          mSucceed = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (prevLogIndex + length entries) True
+          succeed = s { slog = addSlog, commitIndex = newCommitIndex, currentTerm = term, sendMe = push mSucceed sendMe }
+
 respondFollower s _ _ = error "wtf"
 
 respondLeader :: Server -> Message -> RMessage -> Server
@@ -200,6 +214,13 @@ respondLeader s@Server{..} m@Message{..} r@AE{..}
                              currentTerm = term,
                              votedFor = src }
   | otherwise = s
+
+respondLeader s@Server{..} m@Message{..} r@AER{..}
+  | success == False = s { nextIndices = adjustedNext subtract }
+  | success == True =  s { nextIndices = adjustedNext (+), matchIndices = updateMatched }
+    where adjustedNext subOrAdd = HM.adjust (subOrAdd 1) sid nextIndices
+          updateMatched = HM.adjust (const lastIndex) sid matchIndices
+
 respondLeader s@Server{..} m@Message{..} _ = s
 
 respondCandidate :: Server -> Message -> RMessage -> Server

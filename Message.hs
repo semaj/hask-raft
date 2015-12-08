@@ -20,7 +20,7 @@ data Command = Command {
   cmid :: !String,
   ckey :: !String,
   cvalue :: !String
-} deriving (Show, Generic)
+} deriving (Show, Generic, Eq)
 
 instance ToJSON Command
 instance FromJSON Command
@@ -46,7 +46,7 @@ data Message = Message {
   key :: Maybe String,
   value :: Maybe String,
   rmess :: Maybe RMessage
-} deriving (Show)
+} deriving (Show, Eq)
 
 instance FromJSON Message where
   parseJSON = withObject "message" $ \o -> do
@@ -81,7 +81,7 @@ data RMessage = AE {
   leaderCommit :: Int
 } | AER {
   term :: Int,
-  lastIndex :: Int,
+  lastIndex :: Int, -- ONLY USE THIS IF SUCCESS IS TRUE
   success :: Bool
 } | RV {
   term :: Int,
@@ -91,7 +91,7 @@ data RMessage = AE {
 } | RVR {
   term :: Int,
   voteGranted :: Bool
-} deriving (Generic, Show)
+} deriving (Generic, Show, Eq)
 
 instance ToJSON RMessage
 instance FromJSON RMessage

@@ -29,15 +29,15 @@ tryGet chan = do
 receiver :: Socket -> Chan Message -> IO ()
 receiver s messages = do
   forever $ do
-    msg <- recv s 16384
-    -- putStrLn "MESSAGE!"
-    -- putStrLn msg
+    msg <- recv s 8192
+    --putStrLn "MESSAGE!"
+    --putStrLn msg
     let splitR = splitOn "\n" msg
     -- putStrLn $ "split: " ++ (show splitR)
     let fsMessages = map fromString splitR
     -- putStrLn $ "fsm: " ++ (show fsMessages)
     let mMessages = map decode fsMessages :: [Maybe Message]
-    -- putStrLn $ "mmess: " ++ (show mMessages)
+    --putStrLn $ "mmess: " ++ (show mMessages)
     writeList2Chan messages $ catMaybes mMessages
 
 getSocket :: String -> IO Socket
@@ -52,17 +52,20 @@ serverLoop server chan socket = do
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
-  -- unless (isNothing message) $ do putStrLn $ show $ fromJust message
+  --unless (isNothing message) $ do putStrLn $ show $ fromJust message
   --if 0.01 < (abs $ diffUTCTime time (lastSent server))
   --then do
+  -- when (isJust message) $ do
+  --   let m = fromJust message
+  --   if (fromJust
   let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
   let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
-  putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
+  when (sState server' == Leader) $ do putStrLn (show $ store server') -- do putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
   --putStrLn $ "to : " ++ (show $ map dst $ sendMe server')
   --putStrLn $ show mapped
   mapM (\ x -> do
-    i <- send socket x
-    putStrLn $ (if (length x == i) then "ITSOKAY " else "NOTOKAY ") ++ (show $ length x) ++ " : " ++ (show i))
+    send socket x)
+    --putStrLn $ (if (length x == i) then "ITSOKAY " else "NOTOKAY ") ++ (show $ length x) ++ " : " ++ (show i))
     mapped
 
   --void $ mapM (send socket) mapped
