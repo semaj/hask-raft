@@ -42,45 +42,32 @@ receiver s messages = do
 
 getSocket :: String -> IO Socket
 getSocket id = do
-  soc <- socket AF_UNIX Stream 0
+  soc <- socket AF_UNIX Stream defaultProtocol
   connect soc $ SockAddrUnix id
   return soc
 
-sender :: Socket -> Chan Message -> IO ()
-sender s messages = do
-  forever $ do
-    threadDelay 1000
-    msg <- getChanContents messages
-    let fixed = map (\x -> ((toString . encode) x) ++ "\n") msg
-    mapM (send s) fixed
-
-serverLoop :: Server -> Chan Message -> Chan Message -> Socket -> IO ()
-serverLoop server receiving sending socket = do
-  message <- tryGet receiving
+serverLoop :: Server -> Chan Message -> Socket -> IO ()
+serverLoop server chan socket = do
+  message <- tryGet chan
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
   -- unless (isNothing message) $ do putStrLn $ show $ fromJust message
   let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
   putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
-  when ((length $ sendMe server') > 0) $ do
-    --let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
+  when (0.1 < (abs $ diffUTCTime time (lastSent server')) && (length $ sendMe server') > 0) $ do
+    let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
     putStrLn $ "to : " ++ (show $ map dst $ sendMe server')
     -- putStrLn $ show mapped
-    writeList2Chan sending $ sendMe server'
-    --void $ mapM (send socket) mapped
+    void $ mapM (send socket) mapped
   --threadDelay 100
-  serverLoop (server' { sendMe = [] } ) receiving sending socket
+  serverLoop (server' { sendMe = [] } ) chan socket
 
-start :: Server -> Socket -> IO ()
-start server socket = do
-  receiving <- newChan
-  sending <- newChan
-  tid <- forkIO $ receiver socket receiving
-  stid <- forkIO $ sender socket sending
-  serverLoop server receiving sending socket
+start :: Server -> Chan Message -> Socket -> IO ()
+start server chan socket = do
+  tid <- forkIO $ receiver socket chan
+  serverLoop server chan socket
   killThread tid
-  killThread stid
 
 initialServer :: String -> [String] -> IO Server
 initialServer myID otherIDs = do
@@ -91,7 +78,8 @@ initialServer myID otherIDs = do
 main :: IO ()
 main = do
     args <- getArgs
+    messageChan <- newChan
     let myID = head args
         otherIDs = tail args
     server <- initialServer myID otherIDs
-    withSocketsDo $ bracket (getSocket myID) sClose (start server)
+    withSocketsDo $ bracket (getSocket myID) sClose (start server messageChan)
