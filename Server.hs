@@ -65,11 +65,11 @@ majority = 2 -- because 1 is always implied (1 + 2)
 push :: a -> [a] -> [a]
 push a as = as ++ [a]
 
-step :: String -> Server -> Server
-step newMid s@Server{..}
+step :: String -> UTCTime -> Server -> Server
+step newMid now s@Server{..}
   | sState == Follower = stepFollower newMid s
   | sState == Candidate = stepCandidate newMid s
-  | sState == Leader = stepLeader newMid s
+  | sState == Leader = stepLeader newMid now s
 
 stepFollower :: String -> Server -> Server
 stepFollower newMid s@Server{..} = s
@@ -87,12 +87,14 @@ stepCandidate newMid s@Server{..}
           rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
 -- Execute commands (that we can), while queueing up responses, and send AEs
-stepLeader :: String -> Server -> Server
-stepLeader newMid s@Server{..} = leaderExecute s --leaderSendAEs newMid $ leaderExecute s
+stepLeader :: String -> UTCTime -> Server -> Server
+stepLeader newMid now s@Server{..} = leaderSendAEs newMid now $ leaderExecute s
 
 -- Get the AEs needed to send for the next round
-leaderSendAEs :: String -> Server -> Server
-leaderSendAEs newMid s@Server{..} = s { sendMe = sendMe ++ toFollowers }
+leaderSendAEs :: String -> UTCTime -> Server -> Server
+leaderSendAEs newMid now s@Server{..}
+  | 0.001 > (abs $ diffUTCTime lastSent now) = s
+  | otherwise = s { sendMe = sendMe ++ toFollowers, lastSent = now }
   where toFollowers = map (heartbeat newMid s) $ HM.toList nextIndices
 
 -- For a given other server, get the AE they need
@@ -123,8 +125,6 @@ execute s@Server{..} (Command{..}:cs)
     where get = HM.lookup ckey store
           newStore = HM.insert ckey cvalue store -- lazy eval ftw
           message k v = Message sid creator sid (if isNothing v then FAIL else OK) cmid k v Nothing
-
-
 
 -- Given a time in the past, the current time, and a timeout (in ms) - have we exceeded this delta?
 isExpired :: UTCTime -> UTCTime -> Int -> Bool
@@ -218,8 +218,8 @@ respondLeader s@Server{..} m@Message{..} r@AE{..}
 respondLeader s@Server{..} m@Message{..} r@AER{..}
   | success == False = s { nextIndices = adjustedNext subtract }
   | success == True =  s { nextIndices = adjustedNext (+), matchIndices = updateMatched }
-    where adjustedNext subOrAdd = HM.adjust (subOrAdd 1) sid nextIndices
-          updateMatched = HM.adjust (const lastIndex) sid matchIndices
+    where adjustedNext subOrAdd = HM.adjust (subOrAdd 1) src nextIndices
+          updateMatched = HM.adjust (const lastIndex) src matchIndices
 
 respondLeader s@Server{..} m@Message{..} _ = s
 

@@ -57,19 +57,23 @@ serverLoop server chan socket = do
   --then do
   -- when (isJust message) $ do
   --   let m = fromJust message
-  --   if (fromJust
-  let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
+  --   when ((sState server) /= Leader && ((messType m) == PUT || (messType m == GET))) $ do
+  --     putStrLn "happning"
+  --     void $ send socket $ ((toString . encode) (Message (sid server) (src m) (votedFor server) REDIRECT (mid m) Nothing Nothing Nothing)) ++ "\n"
+  --   serverLoop server chan socket
+  let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
+  when (sState server' == Leader) $ do putStrLn (show $ map messType $ sendMe server') -- do putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
+  -- if (0.1 < (abs $ diffUTCTime (lastSent server') time))
+  -- then do --send
   let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
-  when (sState server' == Leader) $ do putStrLn (show $ store server') -- do putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
-  --putStrLn $ "to : " ++ (show $ map dst $ sendMe server')
-  --putStrLn $ show mapped
-  mapM (\ x -> do
-    send socket x)
-    --putStrLn $ (if (length x == i) then "ITSOKAY " else "NOTOKAY ") ++ (show $ length x) ++ " : " ++ (show i))
-    mapped
+  mapM (send socket) mapped
+  serverLoop (server' { sendMe = [] } ) chan socket
+  -- else do
+  --   let mapped = map (((flip (++)) "\n") . toString . encode) $ filter ((/= RAFT) . messType) $ sendMe server'
+  --   mapM (send socket) mapped
+  --   serverLoop (server' { sendMe = [] } ) chan socket
 
   --void $ mapM (send socket) mapped
-  serverLoop (server' { sendMe = [], lastSent = time } ) chan socket
   -- else do
   --   let server' = receiveMessage server time possibleTimeout message
   --   serverLoop server' chan socket
