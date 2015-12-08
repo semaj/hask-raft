@@ -46,39 +46,52 @@ getSocket id = do
   connect soc $ SockAddrUnix id
   return soc
 
-serverLoop :: Server -> Chan Message -> Socket -> IO ()
-serverLoop server chan socket = do
-  message <- tryGet chan
+sender :: Socket -> Chan Message -> IO ()
+sender s messages = do
+  forever $ do
+    threadDelay 1000
+    msg <- getChanContents messages
+    let fixed = map (\x -> ((toString . encode) x) ++ "\n") msg
+    mapM (send s) fixed
+
+serverLoop :: Server -> Chan Message -> Chan Message -> Socket -> IO ()
+serverLoop server receiving sending socket = do
+  message <- tryGet receiving
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
-  unless (isNothing message) $ do putStrLn $ show $ fromJust message
+  -- unless (isNothing message) $ do putStrLn $ show $ fromJust message
   let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
-  putStrLn $ show server'
-  unless ((length $ sendMe server') == 0) $ do
-    let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
+  putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
+  when ((length $ sendMe server') > 0) $ do
+    --let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
+    putStrLn $ "to : " ++ (show $ map dst $ sendMe server')
     -- putStrLn $ show mapped
-    void $ mapM (send socket) mapped
-  threadDelay 1000
-  serverLoop (server' { sendMe = [] } ) chan socket
+    writeList2Chan sending $ sendMe server'
+    --void $ mapM (send socket) mapped
+  --threadDelay 100
+  serverLoop (server' { sendMe = [] } ) receiving sending socket
 
-start :: Server -> Chan Message -> Socket -> IO ()
-start server chan socket = do
-  tid <- forkIO $ receiver socket chan
-  serverLoop server chan socket
+start :: Server -> Socket -> IO ()
+start server socket = do
+  receiving <- newChan
+  sending <- newChan
+  tid <- forkIO $ receiver socket receiving
+  stid <- forkIO $ sender socket sending
+  serverLoop server receiving sending socket
   killThread tid
+  killThread stid
 
 initialServer :: String -> [String] -> IO Server
 initialServer myID otherIDs = do
   timeout <- getStdRandom $ randomR timeoutRange
-  lastReceived <- getCurrentTime
-  return $ initServer myID otherIDs lastReceived timeout
+  time <- getCurrentTime
+  return $ initServer myID otherIDs time timeout
 
 main :: IO ()
 main = do
     args <- getArgs
-    messageChan <- newChan
     let myID = head args
         otherIDs = tail args
     server <- initialServer myID otherIDs
-    withSocketsDo $ bracket (getSocket myID) sClose (start server messageChan)
+    withSocketsDo $ bracket (getSocket myID) sClose (start server)

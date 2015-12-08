@@ -37,7 +37,8 @@ data Server = Server {
   votes :: HS.HashSet String,
   --
   timeout :: Int, -- ms
-  lastReceived :: UTCTime
+  lastReceived :: UTCTime,
+  lastSent :: UTCTime
 } deriving (Show)
 
 initServer :: String -> [String] -> UTCTime -> Int -> Server
@@ -49,13 +50,14 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  currentTerm = 0,
                                                  votedFor = "FFFF",
                                                  slog = [],
-                                                 commitIndex = 0,
+                                                 commitIndex = -1,
                                                  lastApplied = 0,
                                                  nextIndices = HM.fromList $ map (flip (,) $ 0) otherIDs,
                                                  matchIndices = HM.fromList $ map (flip (,) $ 0) otherIDs,
                                                  votes = HS.empty,
                                                  timeout = timeout,
-                                                 lastReceived = time }
+                                                 lastReceived = time,
+                                                 lastSent = time }
 
 
 majority :: Int
@@ -85,6 +87,7 @@ stepCandidate newMid s@Server{..}
           lastLogTerm = if length slog == 0 then 0 else cterm $ last slog
           rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
+-- Execute commands (that we can), while queueing up responses, and send AEs
 stepLeader :: String -> Server -> Server
 stepLeader newMid s@Server{..} = leaderSendAEs newMid $ leaderExecute s
 
@@ -98,7 +101,7 @@ heartbeat :: String -> Server -> (String, Int) -> Message
 heartbeat newMid s@Server{..} (dest, nextIndex) = message
   where commandsSend = if nextIndex == length slog then [] else drop nextIndex slog
         prevLogIndex = nextIndex - 1
-        prevLogTerm = if length slog == 0 then 0 else cterm $ (slog!!(nextIndex - 1))
+        prevLogTerm = if nextIndex == 0 then 0 else cterm $ (slog!!(nextIndex - 1))
         rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
         message = Message sid dest sid RAFT (newMid ++ dest) Nothing Nothing rmessage
 
@@ -106,10 +109,10 @@ heartbeat newMid s@Server{..} (dest, nextIndex) = message
 -- to external clients these produce. Updates commitIndex
 leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
-  | commitIndex == newCommitted = s
-  | otherwise = executedServer { commitIndex = newCommitted }
-  where newCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices
-        toBeExecuted = take (newCommitted - commitIndex) $ drop (commitIndex + 1) slog
+  | commitIndex == toBeCommitted = s
+  | otherwise = executedServer { commitIndex = toBeCommitted }
+  where toBeCommitted = length slog - 1 -- minimum $ take majority $ reverse $ sort $ HM.elems matchIndices
+        toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
         executedServer = execute s toBeExecuted
 
 -- Run commands specified in the slog. Update the slog & add responses to sendMe
@@ -124,14 +127,18 @@ execute s@Server{..} (Command{..}:cs)
 
 
 
+-- Given a time in the past, the current time, and a timeout (in ms) - have we exceeded this delta?
 isExpired :: UTCTime -> UTCTime -> Int -> Bool
 isExpired lastReceived now timeout = diff > timeout'
   where timeout' = 0.001 * realToFrac timeout
         diff = abs $ diffUTCTime now lastReceived
 
+-- If the message is nothing and we've expired, transition to Candidate
+-- If not, respond to the message
 receiveMessage :: Server -> UTCTime -> Int -> Maybe Message -> Server
 receiveMessage s@Server{..} time newTimeout Nothing
-  | isExpired lastReceived time timeout = s { sState = Candidate,
+  | (sState == Follower || sState == Candidate) &&
+    isExpired lastReceived time timeout = s { sState = Candidate,
                                               timeout = newTimeout,
                                               lastReceived = time,
                                               votes = HS.empty,
@@ -144,9 +151,8 @@ receiveMessage s time _ (Just m@Message{..})
   | messType == RAFT = respondRaft s' m -- update time on raft message
   | otherwise = s
       where s' = s { lastReceived = time }
-    --       responded = respondToMessage s
-    --       response = (constructMessage s) <$> (sendMe s')
 
+-- If we aren't the leader, redirect to it. If we are, append this to our log.
 respondGet :: Server -> Message -> Server
 respondGet s@Server{..} m@Message{..}
   | sState == Leader = s { slog = append command slog }
@@ -154,6 +160,7 @@ respondGet s@Server{..} m@Message{..}
     where command = Command CGET currentTerm src mid (fromJust key) ""
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
+-- If we aren't the leader, redirect. If we are, append to log
 respondPut :: Server -> Message -> Server
 respondPut s@Server{..} m@Message{..}
   | sState == Leader = s { slog = append command slog }
@@ -161,12 +168,14 @@ respondPut s@Server{..} m@Message{..}
     where command = Command CPUT currentTerm src mid (fromJust key) (fromJust value)
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
+-- Respond to raft message - delegates based on current state
 respondRaft :: Server -> Message -> Server
 respondRaft s@Server{..} m@Message{..}
   | sState == Follower = respondFollower s m $ fromJust rmess
   | sState == Candidate = respondCandidate s m $ fromJust rmess
   | otherwise = respondLeader s m $ fromJust rmess
 
+-- are the given params (last log index, last log term) as up to date as our current log?
 upToDate :: [Command] -> Int -> Int -> Bool
 upToDate [] _ _ = True
 upToDate base lastLogTerm lastLogIndex = baseTI <= (lastLogTerm, lastLogIndex)
@@ -174,28 +183,23 @@ upToDate base lastLogTerm lastLogIndex = baseTI <= (lastLogTerm, lastLogIndex)
 
 respondFollower :: Server -> Message -> RMessage -> Server
 respondFollower s@Server{..} m@Message{..} r@RV{..}
-  | term <= currentTerm = s { sendMe = append (mRvr False) sendMe }
+  | term < currentTerm = s { sendMe = append (mRvr False) sendMe }
   | upToDate slog lastLogTerm lastLogIndex = s { sendMe = append (mRvr True) sendMe,
                                                  votedFor = candidateId,
                                                  currentTerm = term }
   | otherwise = s { sendMe = append (mRvr False) sendMe }
-    where mRvr isSuccess = Message sid src (if isSuccess then src else "FFFF") RAFT mid Nothing Nothing (Just $ RVR (if isSuccess then term else currentTerm) isSuccess)
-respondFollower s _ _ = s
-
--- respondFollower s@Server{..} m@Message{..} r@AE{..}
---   | term < currentTerm = fail
---   | (length slog - 1) < prevLogIndex = fail
---   | cterm (slog!!prevLogIndex) != prevLogTerm = fail { slog = take toTake slog }
---   -- this is not quite right.
---   | otherwise = succeed { commitIndex = newCommit, slog = slog ++ entries }
---       where aer isSuccess = AER currentTerm isSuccess
---             mAer isSuccess = Message sid src votedFor RAFT mid Nothing Nothing (Just $ aer isSuccess)
---             succeed = s { sendMe = append (mAer True) sendMe }
---             fail = s { sendMe = append (mAer False) sendMe }
---             toTake = (length slog) - (prevLogIndex - 1)
---             newCommit = if leaderCommit > commitIndex then min (length entries - 1) leaderCommit else commitIndex
+    where mRvr isSuccess = Message sid src (if isSuccess then candidateId else votedFor) RAFT mid Nothing Nothing (Just $ RVR (if isSuccess then term else currentTerm) isSuccess)
+respondFollower s@Server{..} m@Message{..} r@AE{..}
+  | term >= currentTerm = s { currentTerm = term, votedFor = src }
+  | otherwise = s
+respondFollower s _ _ = error "wtf"
 
 respondLeader :: Server -> Message -> RMessage -> Server
+respondLeader s@Server{..} m@Message{..} r@AE{..}
+  | term > currentTerm = s { sState = Follower,
+                             currentTerm = term,
+                             votedFor = src }
+  | otherwise = s
 respondLeader s@Server{..} m@Message{..} _ = s
 
 respondCandidate :: Server -> Message -> RMessage -> Server
