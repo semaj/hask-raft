@@ -14,3 +14,10 @@ cabal.sandbox.config
 *.aux
 *.hp
 .stack-work/
+.py
+.pyc
+.json
+3700kvstore
+.py~
+project5
+Test*

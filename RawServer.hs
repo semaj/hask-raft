@@ -42,7 +42,7 @@ receiver s messages = do
 
 getSocket :: String -> IO Socket
 getSocket id = do
-  soc <- socket AF_UNIX Stream 0
+  soc <- socket AF_UNIX Stream defaultProtocol
   connect soc $ SockAddrUnix id
   return soc
 
@@ -52,15 +52,19 @@ serverLoop server chan socket = do
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
-  unless (isNothing message) $ do putStrLn $ show $ fromJust message
-  let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
-  putStrLn $ show server'
-  unless ((length $ sendMe server') == 0) $ do
+  -- unless (isNothing message) $ do putStrLn $ show $ fromJust message
+  --putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
+  if 0.01 < (abs $ diffUTCTime time (lastSent server))
+  then do
+    let server' = step (show (newMid :: Int)) $ receiveMessage server time possibleTimeout message
     let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
-    -- putStrLn $ show mapped
+    --putStrLn $ "to : " ++ (show $ map dst $ sendMe server')
+    putStrLn $ show mapped
     void $ mapM (send socket) mapped
-  threadDelay 1000
-  serverLoop (server' { sendMe = [] } ) chan socket
+    serverLoop (server' { sendMe = [], lastSent = time } ) chan socket
+  else do
+    let server' = receiveMessage server time possibleTimeout message
+    serverLoop server' chan socket
 
 start :: Server -> Chan Message -> Socket -> IO ()
 start server chan socket = do
@@ -71,8 +75,8 @@ start server chan socket = do
 initialServer :: String -> [String] -> IO Server
 initialServer myID otherIDs = do
   timeout <- getStdRandom $ randomR timeoutRange
-  lastReceived <- getCurrentTime
-  return $ initServer myID otherIDs lastReceived timeout
+  time <- getCurrentTime
+  return $ initServer myID otherIDs time timeout
 
 main :: IO ()
 main = do
