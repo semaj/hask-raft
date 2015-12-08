@@ -30,14 +30,14 @@ receiver :: Socket -> Chan Message -> IO ()
 receiver s messages = do
   forever $ do
     msg <- recv s 4096
-    putStrLn "MESSAGE!"
-    putStrLn msg
+    -- putStrLn "MESSAGE!"
+    -- putStrLn msg
     let splitR = splitOn "\n" msg
-    putStrLn $ "split: " ++ (show splitR)
+    -- putStrLn $ "split: " ++ (show splitR)
     let fsMessages = map fromString splitR
-    putStrLn $ "fsm: " ++ (show fsMessages)
+    -- putStrLn $ "fsm: " ++ (show fsMessages)
     let mMessages = map decode fsMessages :: [Maybe Message]
-    putStrLn $ "mmess: " ++ (show mMessages)
+    -- putStrLn $ "mmess: " ++ (show mMessages)
     writeList2Chan messages $ catMaybes mMessages
 
 getSocket :: String -> IO Socket

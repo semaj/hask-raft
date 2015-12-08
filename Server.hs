@@ -11,6 +11,7 @@ import Debug.Trace
 import qualified Data.HashMap.Lazy as HM
 import qualified Data.HashSet as HS
 import Data.Maybe
+import Data.List
 
 data ServerState = Follower | Candidate | Leader deriving (Show, Eq)
 
@@ -46,7 +47,7 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  store = HM.empty,
                                                  sendMe = [],
                                                  currentTerm = 0,
-                                                 votedFor = "",
+                                                 votedFor = "FFFF",
                                                  slog = [],
                                                  commitIndex = 0,
                                                  lastApplied = 0,
@@ -85,7 +86,43 @@ stepCandidate newMid s@Server{..}
           rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
 stepLeader :: String -> Server -> Server
-stepLeader newMid s@Server{..} = s
+stepLeader newMid s@Server{..} = leaderSendAEs newMid $ leaderExecute s
+
+-- Get the AEs needed to send for the next round
+leaderSendAEs :: String -> Server -> Server
+leaderSendAEs newMid s@Server{..} = s { sendMe = sendMe ++ toFollowers }
+  where toFollowers = map (heartbeat newMid s) $ HM.toList nextIndices
+
+-- For a given other server, get the AE they need
+heartbeat :: String -> Server -> (String, Int) -> Message
+heartbeat newMid s@Server{..} (dest, nextIndex) = message
+  where commandsSend = if nextIndex == length slog then [] else drop nextIndex slog
+        prevLogIndex = nextIndex - 1
+        prevLogTerm = if length slog == 0 then 0 else cterm $ (slog!!(nextIndex - 1))
+        rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
+        message = Message sid dest sid RAFT (newMid ++ dest) Nothing Nothing rmessage
+
+-- Leader executes the committed commands in its log and prepares the responses
+-- to external clients these produce. Updates commitIndex
+leaderExecute :: Server -> Server
+leaderExecute s@Server{..}
+  | commitIndex == newCommitted = s
+  | otherwise = executedServer { commitIndex = newCommitted }
+  where newCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices
+        toBeExecuted = take (newCommitted - commitIndex) $ drop (commitIndex + 1) slog
+        executedServer = execute s toBeExecuted
+
+-- Run commands specified in the slog. Update the slog & add responses to sendMe
+execute :: Server -> [Command] -> Server
+execute s [] = s
+execute s@Server{..} (Command{..}:cs)
+  | ctype == CGET = execute s { sendMe = append (message (Just ckey) get) sendMe } cs
+  | ctype == CPUT = execute s { sendMe = append (message (Just ckey) (Just cvalue)) sendMe, store = newStore } cs
+    where get = HM.lookup ckey store
+          newStore = HM.insert ckey cvalue store -- lazy eval ftw
+          message k v = Message sid creator sid (if isNothing v then FAIL else OK) cmid k v Nothing
+
+
 
 isExpired :: UTCTime -> UTCTime -> Int -> Bool
 isExpired lastReceived now timeout = diff > timeout'
@@ -100,11 +137,11 @@ receiveMessage s@Server{..} time newTimeout Nothing
                                               votes = HS.empty,
                                               currentTerm = currentTerm + 1 }
   | otherwise = s
-receiveMessage _ _ _ m | trace (show m) False = undefined
+-- receiveMessage _ _ _ m | trace (show m) False = undefined
 receiveMessage s time _ (Just m@Message{..})
-  | messType ==  GET = respondGet s' m
-  | messType == PUT = respondPut s' m
-  | messType == RAFT = respondRaft s' m
+  | messType ==  GET = respondGet s m
+  | messType == PUT = respondPut s m
+  | messType == RAFT = respondRaft s' m -- update time on raft message
   | otherwise = s
       where s' = s { lastReceived = time }
     --       responded = respondToMessage s
@@ -114,14 +151,14 @@ respondGet :: Server -> Message -> Server
 respondGet s@Server{..} m@Message{..}
   | sState == Leader = s { slog = append command slog }
   | otherwise = s { sendMe = append redirect sendMe }
-    where command = Command CGET currentTerm src (fromJust key) ""
+    where command = Command CGET currentTerm src mid (fromJust key) ""
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
 respondPut :: Server -> Message -> Server
 respondPut s@Server{..} m@Message{..}
   | sState == Leader = s { slog = append command slog }
   | otherwise = s { sendMe = append redirect sendMe }
-    where command = Command CPUT currentTerm src (fromJust key) (fromJust value)
+    where command = Command CPUT currentTerm src mid (fromJust key) (fromJust value)
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
 respondRaft :: Server -> Message -> Server
@@ -171,4 +208,3 @@ respondCandidate s@Server{..} m@Message{..} r@AE{..}
                              votedFor = src }
   | otherwise = s
 respondCandidate s _ _ = s
-
