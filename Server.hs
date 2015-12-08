@@ -89,7 +89,7 @@ stepCandidate newMid s@Server{..}
 
 -- Execute commands (that we can), while queueing up responses, and send AEs
 stepLeader :: String -> Server -> Server
-stepLeader newMid s@Server{..} = leaderSendAEs newMid $ leaderExecute s
+stepLeader newMid s@Server{..} = leaderExecute s --leaderSendAEs newMid $ leaderExecute s
 
 -- Get the AEs needed to send for the next round
 leaderSendAEs :: String -> Server -> Server
