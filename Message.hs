@@ -8,9 +8,15 @@ import Data.Aeson
 import Data.Char
 import Data.Maybe
 import GHC.Generics
+import Data.Time.Clock
 
 timeoutRange :: (Int, Int)
 timeoutRange = (150, 300) -- ms
+
+data SentMessage = SentMessage {
+  message :: Message,
+  sent :: UTCTime
+} deriving (Show, Eq)
 
 data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {

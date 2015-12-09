@@ -23,6 +23,7 @@ data Server = Server {
   others :: [String],
   store :: HM.HashMap String String,
   sendMe :: [Message],
+  lastMess :: HM.HashMap String SentMessage,
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
@@ -46,6 +47,7 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  others = otherIDs,
                                                  sState = Follower,
                                                  store = HM.empty,
+                                                 lastMess = HM.empty,
                                                  sendMe = [],
                                                  currentTerm = 0,
                                                  votedFor = "FFFF",
@@ -74,16 +76,34 @@ step newMid now s@Server{..}
 stepFollower :: String -> Server -> Server
 stepFollower newMid s@Server{..} = s
 
+resendOutdated :: UTCTime -> HM.HashMap String SentMessage -> (HM.HashMap String SentMessage, [Message])
+resendOutdated now hm = (update, getExpired)
+    where expired x = 0.001 < (abs $ diffUTCTime now (sent x))
+          getExpired = map message $ HM.elems $ HM.filter (\y -> expired y) hm
+          update = HM.map (\z -> if expired z then z { sent = now } else z) hm
+
+sendNew :: UTCTime
+        -> Message -- Base message
+        -> HM.HashMap String SentMessage
+        -> [String]-- destinations
+        -> (HM.HashMap String SentMessage, [Message])
+sendNew now Message{..} hm dests = (newMap, HM.elems destToMess)
+    where newDests = filter (\x -> not $ HM.member x hm) dests
+          destToMess = HM.fromList $ map (\x -> (x, Message src x leader messType (mid ++ x) Nothing Nothing rmess)) newDests
+          newMap = foldl (\a b -> HM.insert b (SentMessage ((HM.!) destToMess b) now) a) hm newDests
+
 stepCandidate :: String -> Server -> Server
 stepCandidate newMid s@Server{..}
   | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
+                                   lastMess = HM.empty,
                                    nextIndices = HM.map (const $ length slog) nextIndices,
                                    matchIndices = HM.map (const 0) matchIndices,
                                    votes = HS.empty }
   | otherwise = s { sendMe = push rv sendMe } -- could avoid sending to those already voted for us
     where lastLogIndex = if length slog == 0 then 0 else length slog - 1
           lastLogTerm = if length slog == 0 then 0 else cterm $ last slog
+          --rv = Just $ RV currentTerm sid lastLogIndex lastLogTerm
           rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
 
 -- Execute commands (that we can), while queueing up responses, and send AEs
