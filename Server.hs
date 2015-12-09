@@ -77,10 +77,10 @@ stepFollower :: String -> Server -> Server
 stepFollower newMid s@Server{..} = s
 
 resendOutdated :: UTCTime -> HM.HashMap String SentMessage -> (HM.HashMap String SentMessage, [Message])
-resendOutdated now hm = (update, getExpired)
+resendOutdated now hm = (update, catMaybes getExpired)
     where expired x = 0.1 < (abs $ diffUTCTime now (sent x))
           getExpired = map message $ HM.elems $ HM.filter (\y -> expired y) hm
-          update = HM.map (\z -> if expired z then z { sent = now } else z) hm
+          update = HM.map (\z -> if (isJust $ message z) && expired z then z { sent = now } else z) hm
 
 sendNew :: UTCTime
         -> Message -- Base message
@@ -88,9 +88,10 @@ sendNew :: UTCTime
         -> [String]-- destinations
         -> (HM.HashMap String SentMessage, [Message])
 sendNew now Message{..} hm dests = (newMap, HM.elems destToMess)
-    where newDests = filter (\x -> not $ HM.member x hm) dests
+    where newDests = filter (\x -> (not $ HM.member x hm) || (isNothing $ message $ (HM.!) hm x)) dests
           destToMess = HM.fromList $ map (\x -> (x, Message src x leader messType (mid ++ x) Nothing Nothing rmess)) newDests
-          newMap = foldl (\a b -> HM.insert b (SentMessage ((HM.!) destToMess b) now) a) hm newDests
+          newMap = foldl (\a b -> HM.insert b (SentMessage (HM.lookup b destToMess) now) a) hm newDests
+          -- this needs to change like leader send AEs
 
 stepCandidate :: String -> UTCTime -> Server -> Server
 stepCandidate newMid now s@Server{..}
@@ -115,12 +116,15 @@ stepLeader newMid now s@Server{..} = leaderSendAEs newMid now $ leaderExecute s
 
 -- Get the AEs needed to send for the next round
 leaderSendAEs :: String -> UTCTime -> Server -> Server
-leaderSendAEs newMid now s@Server{..} = s { sendMe = sendMe ++ resend ++ alsoSend, lastMess = newMap  }
+leaderSendAEs newMid now s@Server{..}
+  -- | trace (show resentMap) False = undefined
+  | True = s { sendMe = sendMe ++ resend ++ (catMaybes alsoSend), lastMess = newMap'  }
   where hearbeats = map (heartbeat newMid s) $ HM.toList nextIndices
         (resentMap, resend) = resendOutdated now lastMess
-        stillNeed = HS.toList $ HS.difference (HS.fromList others) (HS.fromList $ HM.keys resentMap)
-        newMap = foldl (\a b -> HM.insert b (SentMessage (heartbeat newMid s (b, (HM.!) nextIndices b)) now) a) resentMap stillNeed
-        alsoSend = map (\x -> message $ (HM.!) newMap x) stillNeed
+        stillNeed = filter (\x -> (not $ HM.member x resentMap) || (isNothing $ message $ (HM.!) resentMap x)) others
+        newMap = foldl (\a b -> if HM.member b resentMap then resentMap else HM.insert b (SentMessage Nothing now) a) resentMap stillNeed
+        newMap' = foldl (\a b -> HM.adjust (\x -> x { message = Just (heartbeat newMid s (b, (HM.!) nextIndices b)) }) b a) newMap stillNeed
+        alsoSend = map (\x -> message $ (HM.!) newMap' x) stillNeed
 
 -- For a given other server, get the AE they need
 heartbeat :: String -> Server -> (String, Int) -> Message
@@ -246,13 +250,13 @@ respondLeader s@Server{..} m@Message{..} r@AER{..}
   | success == True =  s { nextIndices = HM.insert src (lastIndex + 1) nextIndices,
                           matchIndices = HM.insert src lastIndex matchIndices,
                           lastMess = newMap }
-    where newMap = lastMess -- HM.delete src lastMess
+    where newMap =  lastMess -- HM.adjust (\x -> x { message = Nothing } ) src lastMess
 
 respondLeader s@Server{..} m@Message{..} _ = s
 
 respondCandidate :: Server -> Message -> RMessage -> Server
 respondCandidate s@Server{..} m@Message{..} r@RVR{..}
-  | voteGranted == True = s { votes = HS.insert src votes }
+  | voteGranted == True = s { votes = HS.insert src votes, lastMess = HM.adjust (\x -> x { message = Nothing }) src lastMess }
   | otherwise = s
 respondCandidate s@Server{..} m@Message{..} r@AE{..}
   | term >= currentTerm = s { sState = Follower,

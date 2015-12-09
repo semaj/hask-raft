@@ -14,7 +14,7 @@ timeoutRange :: (Int, Int)
 timeoutRange = (500, 1000) -- ms
 
 data SentMessage = SentMessage {
-  message :: Message,
+  message :: Maybe Message,
   sent :: UTCTime
 } deriving (Show, Eq)
 
