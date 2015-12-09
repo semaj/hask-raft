@@ -8,7 +8,7 @@ import Data.Aeson
 import Data.Time
 import System.Random
 import Debug.Trace
-import qualified Data.HashMap.Lazy as HM
+import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.Maybe
 import Data.List
@@ -20,14 +20,14 @@ data ServerState = Follower | Candidate | Leader deriving (Show, Eq)
 data Server = Server {
   sState :: !ServerState,
   sid :: !String,
-  others :: [String],
+  others :: ![String],
   store :: HM.HashMap String String,
-  sendMe :: [Message],
+  sendMe :: ![Message],
   lastMess :: HM.HashMap String SentMessage,
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
-  slog :: [Command],
+  slog :: ![Command],
   -- Volatile state
   commitIndex :: Int,
   lastApplied :: Int,
@@ -78,7 +78,7 @@ stepFollower newMid s@Server{..} = s
 
 resendOutdated :: UTCTime -> HM.HashMap String SentMessage -> (HM.HashMap String SentMessage, [Message])
 resendOutdated now hm = (update, getExpired)
-    where expired x = 0.001 < (abs $ diffUTCTime now (sent x))
+    where expired x = 0.1 < (abs $ diffUTCTime now (sent x))
           getExpired = map message $ HM.elems $ HM.filter (\y -> expired y) hm
           update = HM.map (\z -> if expired z then z { sent = now } else z) hm
 
@@ -115,10 +115,12 @@ stepLeader newMid now s@Server{..} = leaderSendAEs newMid now $ leaderExecute s
 
 -- Get the AEs needed to send for the next round
 leaderSendAEs :: String -> UTCTime -> Server -> Server
-leaderSendAEs newMid now s@Server{..}
-  | 0.001 > (abs $ diffUTCTime lastSent now) = s
-  | otherwise = s { sendMe = sendMe ++ toFollowers, lastSent = now }
-  where toFollowers = map (heartbeat newMid s) $ HM.toList nextIndices
+leaderSendAEs newMid now s@Server{..} = s { sendMe = sendMe ++ resend ++ alsoSend, lastMess = newMap  }
+  where hearbeats = map (heartbeat newMid s) $ HM.toList nextIndices
+        (resentMap, resend) = resendOutdated now lastMess
+        stillNeed = HS.toList $ HS.difference (HS.fromList others) (HS.fromList $ HM.keys resentMap)
+        newMap = foldl (\a b -> HM.insert b (SentMessage (heartbeat newMid s (b, (HM.!) nextIndices b)) now) a) resentMap stillNeed
+        alsoSend = map (\x -> message $ (HM.!) newMap x) stillNeed
 
 -- For a given other server, get the AE they need
 heartbeat :: String -> Server -> (String, Int) -> Message
@@ -229,7 +231,7 @@ respondFollower s@Server{..} m@Message{..} r@AE{..}
           mSucceed = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (prevLogIndex + length entries) True
           succeed = s { slog = addSlog, commitIndex = newCommitIndex, currentTerm = term, sendMe = push mSucceed sendMe }
 
-respondFollower s _ _ = error "wtf"
+respondFollower s _ r = s -- error $ "wtf " ++ (show r)
 
 respondLeader :: Server -> Message -> RMessage -> Server
 respondLeader s@Server{..} m@Message{..} r@AE{..}
@@ -239,9 +241,12 @@ respondLeader s@Server{..} m@Message{..} r@AE{..}
   | otherwise = s
 
 respondLeader s@Server{..} m@Message{..} r@AER{..}
-  | success == False = s { nextIndices = HM.adjust (subtract 1) src nextIndices }
+  | success == False = s { nextIndices = HM.adjust (subtract 1) src nextIndices,
+                          lastMess = newMap }
   | success == True =  s { nextIndices = HM.insert src (lastIndex + 1) nextIndices,
-                          matchIndices = HM.insert src lastIndex matchIndices }
+                          matchIndices = HM.insert src lastIndex matchIndices,
+                          lastMess = newMap }
+    where newMap = lastMess -- HM.delete src lastMess
 
 respondLeader s@Server{..} m@Message{..} _ = s
 
