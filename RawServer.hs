@@ -62,7 +62,8 @@ serverLoop server chan socket = do
   --     void $ send socket $ ((toString . encode) (Message (sid server) (src m) (votedFor server) REDIRECT (mid m) Nothing Nothing Nothing)) ++ "\n"
   --   serverLoop server chan socket
   let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
-  when (sState server' == Leader) $ do putStrLn (show $ map messType $ sendMe server') -- do putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
+  when (sState server' == Leader) $ do putStrLn (show $ map messType $ votedFor server') -- do putStrLn $ show $ (show $ sState server') ++ " : " ++ (sid server') ++ " : " ++ (show $ currentTerm server') ++ " | " ++ (show $ votedFor server')
+  --when (sState server' == Leader) $ do putStrLn (show $ sid server')
   -- if (0.1 < (abs $ diffUTCTime (lastSent server') time))
   -- then do --send
   let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'

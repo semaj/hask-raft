@@ -70,7 +70,7 @@ push a as = as ++ [a]
 step :: String -> UTCTime -> Server -> Server
 step newMid now s@Server{..}
   | sState == Follower = stepFollower newMid s
-  | sState == Candidate = stepCandidate newMid s
+  | sState == Candidate = stepCandidate newMid now s
   | sState == Leader = stepLeader newMid now s
 
 stepFollower :: String -> Server -> Server
@@ -92,19 +92,22 @@ sendNew now Message{..} hm dests = (newMap, HM.elems destToMess)
           destToMess = HM.fromList $ map (\x -> (x, Message src x leader messType (mid ++ x) Nothing Nothing rmess)) newDests
           newMap = foldl (\a b -> HM.insert b (SentMessage ((HM.!) destToMess b) now) a) hm newDests
 
-stepCandidate :: String -> Server -> Server
-stepCandidate newMid s@Server{..}
+stepCandidate :: String -> UTCTime -> Server -> Server
+stepCandidate newMid now s@Server{..}
   | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
                                    lastMess = HM.empty,
                                    nextIndices = HM.map (const $ length slog) nextIndices,
                                    matchIndices = HM.map (const 0) matchIndices,
                                    votes = HS.empty }
-  | otherwise = s { sendMe = push rv sendMe } -- could avoid sending to those already voted for us
+  | otherwise = s { sendMe = sendMe ++ resend ++ alsoSend, lastMess = newMap }
     where lastLogIndex = if length slog == 0 then 0 else length slog - 1
           lastLogTerm = if length slog == 0 then 0 else cterm $ last slog
-          --rv = Just $ RV currentTerm sid lastLogIndex lastLogTerm
-          rv = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing $ Just $ RV currentTerm sid lastLogIndex lastLogTerm
+          rv = Just $ RV currentTerm sid lastLogIndex lastLogTerm
+          base = Message sid "FFFF" "FFFF" RAFT newMid Nothing Nothing rv
+          stillNeed = HS.toList $ HS.difference (HS.fromList others) votes
+          (resentMap, resend) = resendOutdated now lastMess
+          (newMap, alsoSend) = sendNew now base resentMap stillNeed
 
 -- Execute commands (that we can), while queueing up responses, and send AEs
 stepLeader :: String -> UTCTime -> Server -> Server
