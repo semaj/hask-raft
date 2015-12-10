@@ -121,7 +121,7 @@ leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
   | commitIndex == toBeCommitted = s
   | otherwise = executedServer { commitIndex = toBeCommitted, lastApplied = toBeCommitted }
-  where toBeCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
+  where toBeCommitted = length slog - 1 -- minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
         toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
         executedServer = execute s toBeExecuted
 
@@ -183,7 +183,7 @@ respondPut s@Server{..} m@Message{..}
 -- Respond to raft message - delegates based on current state
 respondRaft :: Server -> Message -> Server
 respondRaft s@Server{..} m@Message{..}
-  | sState == Follower = trace "yo" $ respondFollower s m $ fromJust rmess
+  | sState == Follower = respondFollower s m $ fromJust rmess
   | sState == Candidate = respondCandidate s m $ fromJust rmess
   | otherwise = respondLeader s m $ fromJust rmess
 
@@ -230,10 +230,11 @@ respondLeader s@Server{..} m@Message{..} r@AE{..}
 respondLeader s@Server{..} m@Message{..} r@AER{..}
   | success == False = s { nextIndices = HM.adjust (\x -> if x <= 0 then 0 else x - 1) src nextIndices,
                           messQ = newMessQ }
-  | success == True =  s { nextIndices = HM.insert src (lastIndex + 1) nextIndices,
+  | success == True =  s { nextIndices = HM.insert src newNextIndex nextIndices,
                           matchIndices = HM.insert src lastIndex matchIndices,
                           messQ = newMessQ }
     where newMessQ = HM.delete src messQ
+          newNextIndex = if lastIndex >= length slog then length slog - 1 else lastIndex + 1
 
 respondLeader s@Server{..} m@Message{..} _ = s
 

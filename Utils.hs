@@ -11,7 +11,7 @@ import Data.Hashable
 majority :: Int
 majority = 2 -- because 1 is always implied (1 + 2)
 
-sendCooldown = 0.01
+sendCooldown = 0.05
 
 cooledOff :: UTCTime -> UTCTime -> Bool
 cooledOff now t = diff > sendCooldown
@@ -62,7 +62,7 @@ getNextCommands [] _ = []
 getNextCommands slog nextIndex
   | nextIndex > length slog = error $ "getNextCommands: nextIndex greater than slength " ++ (show nextIndex) ++ " : " ++ (show $ length slog)
   | nextIndex == length slog = []
-  | otherwise = take 11 $ drop nextIndex slog
+  | otherwise = take 15 $ drop nextIndex slog
 
 upToDate :: [Command] -> Int -> Int -> Bool
 upToDate [] _ _ = True
