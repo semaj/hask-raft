@@ -24,6 +24,7 @@ data Server = Server {
   store :: HM.HashMap String String,
   sendMe :: ![Message],
   lastMess :: HM.HashMap String SentMessage,
+  midSet :: HS.HashSet String,
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
@@ -49,13 +50,14 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  store = HM.empty,
                                                  lastMess = HM.empty,
                                                  sendMe = [],
+                                                 midSet = HS.empty,
                                                  currentTerm = 0,
                                                  votedFor = "FFFF",
                                                  slog = [],
                                                  commitIndex = -1,
                                                  lastApplied = -1,
                                                  nextIndices = HM.fromList $ map (\x -> (x, 0)) otherIDs,
-                                                 matchIndices = HM.fromList $ map (\x -> (x, 0)) otherIDs,
+                                                 matchIndices = HM.fromList $ map (\x -> (x, (-1))) otherIDs,
                                                  votes = HS.empty,
                                                  timeout = timeout,
                                                  lastReceived = time,
@@ -74,11 +76,11 @@ step newMid now s@Server{..}
   | sState == Leader = stepLeader newMid now s
 
 stepFollower :: String -> Server -> Server
-stepFollower newMid s@Server{..} = followerExecute s
+stepFollower newMid s@Server{..} = followerExecute s -- trace (show $ length slog ) $ followerExecute s
 
 resendOutdated :: UTCTime -> HM.HashMap String SentMessage -> (HM.HashMap String SentMessage, [Message])
 resendOutdated now hm = (update, catMaybes getExpired)
-    where expired x = 0.05 < (abs $ diffUTCTime now (sent x))
+    where expired x = 0.01 < (abs $ diffUTCTime now (sent x))
           getExpired = map message $ HM.elems $ HM.filter (\y -> expired y) hm
           update = HM.map (\z -> if (isJust $ message z) && expired z then z { sent = now } else z) hm
 
@@ -98,8 +100,8 @@ stepCandidate newMid now s@Server{..}
   | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
                                    lastMess = HM.empty,
-                                   nextIndices = HM.map (const $ length slog) nextIndices,
-                                   matchIndices = HM.map (const 0) matchIndices,
+                                   nextIndices = HM.map (const $ commitIndex) nextIndices,
+                                   matchIndices = HM.map (const (-1)) matchIndices,
                                    votes = HS.empty }
   | otherwise = s { sendMe = sendMe ++ resend ++ alsoSend, lastMess = newMap }
     where lastLogIndex = if length slog == 0 then 0 else length slog - 1
@@ -114,11 +116,14 @@ stepCandidate newMid now s@Server{..}
 stepLeader :: String -> UTCTime -> Server -> Server
 stepLeader newMid now s@Server{..} = leaderSendAEs newMid now $ leaderExecute s
 
+ts :: (Show a) => UTCTime -> a -> String
+ts now a = (show now) ++ " : " ++ (show a)
+
 -- Get the AEs needed to send for the next round
 leaderSendAEs :: String -> UTCTime -> Server -> Server
 leaderSendAEs newMid now s@Server{..}
 -- there's a problem with indices...
-  -- | trace ((show $ catMaybes alsoSend) ++ " : " ++ (show nextIndices)) False = undefined
+  -- | trace (ts now nextIndices) False = undefined
   | True = s { sendMe = sendMe ++ resend, lastMess = newMap'  }
   where (resentMap, resend) = resendOutdated now lastMess
         stillNeed = filter (\x -> (not $ HM.member x resentMap) || (isNothing $ message $ (HM.!) resentMap x)) others
@@ -128,10 +133,10 @@ leaderSendAEs newMid now s@Server{..}
 
 -- For a given other server, get the AE they need
 heartbeat :: String -> Server -> (String, Int) -> Message
-heartbeat newMid s@Server{..} (dest, nextIndex) = message -- trace (show $ length commandsSend) $ message
-  where commandsSend = if nextIndex == length slog then [] else take 15 $ drop nextIndex slog
+heartbeat newMid s@Server{..} (dest, nextIndex) = message -- trace (dest ++ " NEXT : " ++  (show nextIndex)) message -- trace (show $ length commandsSend) $ message
+  where commandsSend = if nextIndex == length slog then [] else take 11 $ drop nextIndex slog
         prevLogIndex = nextIndex - 1 --if nextIndex == 0 then nextIndex else nextIndex - 1
-        prevLogTerm = if nextIndex <= 0 then 0 else cterm $ (slog!!(nextIndex - 1))
+        prevLogTerm = trace ((show $ length slog - 1) ++ " : " ++ (show $ nextIndex - 1)) $ if nextIndex <= 0 then 0 else cterm $ (slog!!(nextIndex - 1))
         rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
         message = Message sid dest sid RAFT (newMid ++ dest) Nothing Nothing rmessage
 
@@ -139,9 +144,9 @@ heartbeat newMid s@Server{..} (dest, nextIndex) = message -- trace (show $ lengt
 -- to external clients these produce. Updates commitIndex
 leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
-  | commitIndex == toBeCommitted = s
+  | commitIndex == toBeCommitted = s -- trace ((show $ length slog) ++ " : " ++ (show $ matchIndices)) $ s
   | otherwise = executedServer { commitIndex = toBeCommitted, lastApplied = toBeCommitted }
-  where toBeCommitted = length slog - 1 -- minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
+  where toBeCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
         toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
         executedServer = execute s toBeExecuted
 
@@ -227,9 +232,10 @@ respondFollower s@Server{..} m@Message{..} r@RV{..}
     where mRvr isSuccess = Message sid src (if isSuccess then candidateId else votedFor) RAFT mid Nothing Nothing (Just $ RVR (if isSuccess then term else currentTerm) isSuccess)
 
 respondFollower s@Server{..} m@Message{..} r@AE{..}
-  | term < currentTerm = reject
+  -- | trace (sid ++ " LAST : " ++ (show $ prevLogIndex + length entries)) False = undefined
+  | term < currentTerm = trace "WTF!!!!!!!!!!!!" $ reject
   | prevLogIndex <= 0 = succeed
-  | (length slog - 1 /= prevLogIndex) = inconsistent
+  | (length slog - 1 < prevLogIndex) = inconsistent
   | (cterm $ (slog!!prevLogIndex)) /= prevLogTerm = inconsistent { slog = deleteSlog }
   | otherwise = succeed
     where mReject = Message sid src votedFor RAFT mid Nothing Nothing $ Just $ AER currentTerm (-1) False
@@ -239,7 +245,7 @@ respondFollower s@Server{..} m@Message{..} r@AE{..}
           deleteSlog = take prevLogIndex slog
           addSlog = slog ++ entries
           newCommitIndex = if leaderCommit > commitIndex then min leaderCommit (prevLogIndex + length entries) else commitIndex
-          mSucceed = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (prevLogIndex + length entries) True
+          mSucceed = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (length addSlog - 1) True
           succeed = s { slog = addSlog, commitIndex = newCommitIndex, currentTerm = term, sendMe = push mSucceed sendMe }
 
 respondFollower s _ r = s -- error $ "wtf " ++ (show r)
