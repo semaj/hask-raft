@@ -74,11 +74,11 @@ step newMid now s@Server{..}
   | sState == Leader = stepLeader newMid now s
 
 stepFollower :: String -> Server -> Server
-stepFollower newMid s@Server{..} = s
+stepFollower newMid s@Server{..} = followerExecute s
 
 resendOutdated :: UTCTime -> HM.HashMap String SentMessage -> (HM.HashMap String SentMessage, [Message])
 resendOutdated now hm = (update, catMaybes getExpired)
-    where expired x = 0.1 < (abs $ diffUTCTime now (sent x))
+    where expired x = 0.05 < (abs $ diffUTCTime now (sent x))
           getExpired = map message $ HM.elems $ HM.filter (\y -> expired y) hm
           update = HM.map (\z -> if (isJust $ message z) && expired z then z { sent = now } else z) hm
 
@@ -117,10 +117,10 @@ stepLeader newMid now s@Server{..} = leaderSendAEs newMid now $ leaderExecute s
 -- Get the AEs needed to send for the next round
 leaderSendAEs :: String -> UTCTime -> Server -> Server
 leaderSendAEs newMid now s@Server{..}
-  -- | trace (show resentMap) False = undefined
-  | True = s { sendMe = sendMe ++ resend ++ (catMaybes alsoSend), lastMess = newMap'  }
-  where hearbeats = map (heartbeat newMid s) $ HM.toList nextIndices
-        (resentMap, resend) = resendOutdated now lastMess
+-- there's a problem with indices...
+  -- | trace ((show $ catMaybes alsoSend) ++ " : " ++ (show nextIndices)) False = undefined
+  | True = s { sendMe = sendMe ++ resend, lastMess = newMap'  }
+  where (resentMap, resend) = resendOutdated now lastMess
         stillNeed = filter (\x -> (not $ HM.member x resentMap) || (isNothing $ message $ (HM.!) resentMap x)) others
         newMap = foldl (\a b -> if HM.member b resentMap then resentMap else HM.insert b (SentMessage Nothing now) a) resentMap stillNeed
         newMap' = foldl (\a b -> HM.adjust (\x -> x { message = Just (heartbeat newMid s (b, (HM.!) nextIndices b)) }) b a) newMap stillNeed
@@ -128,8 +128,8 @@ leaderSendAEs newMid now s@Server{..}
 
 -- For a given other server, get the AE they need
 heartbeat :: String -> Server -> (String, Int) -> Message
-heartbeat newMid s@Server{..} (dest, nextIndex) = message
-  where commandsSend = if nextIndex == length slog then [] else drop nextIndex slog
+heartbeat newMid s@Server{..} (dest, nextIndex) = message -- trace (show $ length commandsSend) $ message
+  where commandsSend = if nextIndex == length slog then [] else take 15 $ drop nextIndex slog
         prevLogIndex = nextIndex - 1 --if nextIndex == 0 then nextIndex else nextIndex - 1
         prevLogTerm = if nextIndex <= 0 then 0 else cterm $ (slog!!(nextIndex - 1))
         rmessage = Just $ AE currentTerm sid prevLogIndex prevLogTerm commandsSend commitIndex
@@ -140,10 +140,17 @@ heartbeat newMid s@Server{..} (dest, nextIndex) = message
 leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
   | commitIndex == toBeCommitted = s
-  | otherwise = executedServer { commitIndex = toBeCommitted }
-  where toBeCommitted = length slog - 1 -- minimum $ take majority $ reverse $ sort $ HM.elems matchIndices
+  | otherwise = executedServer { commitIndex = toBeCommitted, lastApplied = toBeCommitted }
+  where toBeCommitted = length slog - 1 -- minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
         toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
         executedServer = execute s toBeExecuted
+
+followerExecute :: Server -> Server
+followerExecute s@Server{..}
+  | commitIndex == lastApplied = s
+  | otherwise = executed { lastApplied = commitIndex }
+    where toBeExecuted = drop (lastApplied + 1) $ take (commitIndex + 1) slog
+          executed = (execute s toBeExecuted) { sendMe = sendMe }
 
 -- Run commands specified in the slog. Update the slog & add responses to sendMe
 execute :: Server -> [Command] -> Server
@@ -221,8 +228,8 @@ respondFollower s@Server{..} m@Message{..} r@RV{..}
 
 respondFollower s@Server{..} m@Message{..} r@AE{..}
   | term < currentTerm = reject
-  | (length slog <= prevLogIndex + 1) = inconsistent
   | prevLogIndex <= 0 = succeed
+  | (length slog - 1 /= prevLogIndex) = inconsistent
   | (cterm $ (slog!!prevLogIndex)) /= prevLogTerm = inconsistent { slog = deleteSlog }
   | otherwise = succeed
     where mReject = Message sid src votedFor RAFT mid Nothing Nothing $ Just $ AER currentTerm (-1) False
@@ -245,12 +252,12 @@ respondLeader s@Server{..} m@Message{..} r@AE{..}
   | otherwise = s
 
 respondLeader s@Server{..} m@Message{..} r@AER{..}
-  | success == False = s { nextIndices = HM.adjust (subtract 1) src nextIndices,
+  | success == False = s { nextIndices = HM.adjust (\x -> if x <= 0 then 0 else x - 1) src nextIndices,
                           lastMess = newMap }
   | success == True =  s { nextIndices = HM.insert src (lastIndex + 1) nextIndices,
                           matchIndices = HM.insert src lastIndex matchIndices,
                           lastMess = newMap }
-    where newMap =  lastMess -- HM.adjust (\x -> x { message = Nothing } ) src lastMess
+    where newMap = HM.adjust (\x -> x { message = Nothing } ) src lastMess
 
 respondLeader s@Server{..} m@Message{..} _ = s
 

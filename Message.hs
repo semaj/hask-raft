@@ -11,7 +11,7 @@ import GHC.Generics
 import Data.Time.Clock
 
 timeoutRange :: (Int, Int)
-timeoutRange = (500, 1000) -- ms
+timeoutRange = (2000, 2500) -- ms
 
 data SentMessage = SentMessage {
   message :: Maybe Message,
