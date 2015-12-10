@@ -51,7 +51,7 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  sState = Follower,
                                                  store = HM.empty,
                                                  messQ = HM.empty,
-                                                 timeQ = HM.empty,
+                                                 timeQ = HM.fromList $ map (\x -> (x, time)) otherIDs,
                                                  sendMe = [],
                                                  currentTerm = 0,
                                                  votedFor = "FFFF",
@@ -77,11 +77,11 @@ checkVotes s@Server{..}
   | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
                                    messQ = HM.empty,
-                                   timeQ = HM.empty,
+                                   timeQ = HM.fromList $ map (\x -> (x, clock)) others,
                                    nextIndices = HM.map (const $ commitIndex) nextIndices,
                                    matchIndices = HM.map (const (commitIndex + 1)) matchIndices,
                                    votes = HS.empty }
-  | otherwise = trace (sid ++ " : " ++ (show votes)) s
+  | otherwise = s
 
 candidateRV :: Int -> String -> String -> [Command] -> String -> Message
 candidateRV currentTerm src baseMid slog dst = Message src dst "FFFF" RAFT (baseMid ++ dst) Nothing Nothing rv
@@ -96,8 +96,7 @@ candidatePrepare newMid s@Server{..} = s { messQ = newMessQ }
           newMessQ = zipAddAllM recipients newRVs messQ
 
 serverSend :: UTCTime -> Server -> Server
-serverSend now s@Server{..} = trace (show $ s { sendMe = sendMe ++ resendMessages, timeQ = newTimeQ }) $ s { sendMe = sendMe ++ resendMessages, timeQ = newTimeQ }
-
+serverSend now s@Server{..} = s { sendMe = sendMe ++ resendMessages, timeQ = newTimeQ }
     where resendMe = getNeedResending now timeQ
           resendMessages = catMaybes $ map (\ srvr -> HM.lookup srvr messQ) resendMe
           newTimeQ = zipAddAllT resendMe (replicate (length resendMe) now) timeQ
@@ -105,7 +104,7 @@ serverSend now s@Server{..} = trace (show $ s { sendMe = sendMe ++ resendMessage
 leaderPrepare :: String -> Server -> Server
 leaderPrepare newMid s@Server{..} = s { messQ = newMessQ }
     where recipients = filter (\ srvr -> not $ HM.member srvr messQ) others
-          newAEs = map (leaderAE commitIndex currentTerm sid newMid slog) $ HM.toList nextIndices
+          newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) recipients
           newMessQ = zipAddAllM recipients newAEs messQ
 
 leaderAE :: Int -> Int -> String -> String -> [Command] -> (String, Int) -> Message
@@ -120,7 +119,7 @@ leaderAE commitIndex currentTerm src baseMid slog (dst, nextIndex) = message
 -- to external clients these produce. Updates commitIndex
 leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
-  | commitIndex == toBeCommitted = s -- trace ((show $ length slog) ++ " : " ++ (show $ matchIndices)) $ s
+  | commitIndex == toBeCommitted = s
   | otherwise = executedServer { commitIndex = toBeCommitted, lastApplied = toBeCommitted }
   where toBeCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
         toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
@@ -184,7 +183,7 @@ respondPut s@Server{..} m@Message{..}
 -- Respond to raft message - delegates based on current state
 respondRaft :: Server -> Message -> Server
 respondRaft s@Server{..} m@Message{..}
-  | sState == Follower = respondFollower s m $ fromJust rmess
+  | sState == Follower = trace "yo" $ respondFollower s m $ fromJust rmess
   | sState == Candidate = respondCandidate s m $ fromJust rmess
   | otherwise = respondLeader s m $ fromJust rmess
 

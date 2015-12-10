@@ -52,8 +52,7 @@ serverLoop server chan socket = do
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
-  -- putStrLn $ show $ sState server
-  when (sState server == Leader) $ do putStrLn (sid server)
+  -- when (sState server == Leader) $ do putStrLn $ sid server
   let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
       mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
   mapM (send socket) mapped
