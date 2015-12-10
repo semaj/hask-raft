@@ -52,35 +52,12 @@ serverLoop server chan socket = do
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
-  --unless (isNothing message) $ do putStrLn $ show $ fromJust message
-  --if 0.01 < (abs $ diffUTCTime time (lastSent server))
-  --then do
-  -- when (isJust message) $ do
-  --   let m = fromJust message
-  --   when ((sState server) /= Leader && ((messType m) == PUT || (messType m == GET))) $ do
-  --     putStrLn "happning"
-  --     void $ send socket $ ((toString . encode) (Message (sid server) (src m) (votedFor server) REDIRECT (mid m) Nothing Nothing Nothing)) ++ "\n"
-  --   serverLoop server chan socket
+  -- putStrLn $ show $ sState server
+  when (sState server == Leader) $ do putStrLn (sid server)
   let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
-  -- when (sState server' == Leader) $ do putStrLn $ show $ sid server'
-    --let x = filter ((== OK) . messType) $ sendMe server'
-    --return ()
-    --unless (length x == 0) $ do putStrLn $ show x
-  -- when (sState server' == Leader) $ do putStrLn (show $ sid server')
-  -- if (0.1 < (abs $ diffUTCTime (lastSent server') time))
-  -- then do --send
-  let mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
+      mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
   mapM (send socket) mapped
   serverLoop (server' { sendMe = [] } ) chan socket
-  -- else do
-  --   let mapped = map (((flip (++)) "\n") . toString . encode) $ filter ((/= RAFT) . messType) $ sendMe server'
-  --   mapM (send socket) mapped
-  --   serverLoop (server' { sendMe = [] } ) chan socket
-
-  --void $ mapM (send socket) mapped
-  -- else do
-  --   let server' = receiveMessage server time possibleTimeout message
-  --   serverLoop server' chan socket
 
 start :: Server -> Chan Message -> Socket -> IO ()
 start server chan socket = do

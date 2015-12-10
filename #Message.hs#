@@ -28,6 +28,15 @@ data Command = Command {
   cvalue :: !String
 } deriving (Show, Generic, Eq)
 
+function :: Hello -> Hello
+function hello = x
+  where 4 = a
+
+data H = C {
+  whats :: up,
+  dude :: 124
+  }
+
 instance ToJSON Command
 instance FromJSON Command
 instance ToJSON CommandType
