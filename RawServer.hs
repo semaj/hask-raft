@@ -14,6 +14,7 @@ import Control.Monad
 import Data.Maybe
 import System.Random
 import Data.Time
+import Data.List
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 
@@ -54,7 +55,7 @@ serverLoop server chan socket = do
   newMid <- getStdRandom $ randomR (100000, 999999)
   -- when (sState server == Leader) $ do putStrLn $ sid server
   let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
-      mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
+      mapped = map (((flip (++)) "\n") . toString . encode) $ nub $ sendMe server'
   mapM (send socket) mapped
   serverLoop (server' { sendMe = [] } ) chan socket
 
