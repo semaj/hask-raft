@@ -91,21 +91,21 @@ candidateRV currentTerm src baseMid slog dst = Message src dst "FFFF" RAFT (base
 
 candidatePrepare :: String -> Server -> Server
 candidatePrepare newMid s@Server{..} = s { messQ = newMessQ }
-    where recipients = filter (\ srvr -> (not $ HS.member srvr votes) && (not $ HM.member srvr messQ)) others
-          newRVs = map (candidateRV currentTerm sid newMid slog) recipients
-          newMessQ = zipAddAllM recipients newRVs messQ
+  where recipients = filter (\ srvr -> (not $ HS.member srvr votes) && (not $ HM.member srvr messQ)) others
+        newRVs = map (candidateRV currentTerm sid newMid slog) recipients
+        newMessQ = zipAddAllM recipients newRVs messQ
 
 serverSend :: UTCTime -> Server -> Server
 serverSend now s@Server{..} = s { sendMe = sendMe ++ resendMessages, timeQ = newTimeQ }
-    where resendMe = getNeedResending now timeQ
-          resendMessages = catMaybes $ map (\ srvr -> HM.lookup srvr messQ) resendMe
-          newTimeQ = zipAddAllT resendMe (replicate (length resendMe) now) timeQ
+  where resendMe = getNeedResending now timeQ
+        resendMessages = catMaybes $ map (\ srvr -> HM.lookup srvr messQ) resendMe
+        newTimeQ = zipAddAllT resendMe (replicate (length resendMe) now) timeQ
 
 leaderPrepare :: String -> Server -> Server
 leaderPrepare newMid s@Server{..} = s { messQ = newMessQ }
     where recipients = filter (\ srvr -> not $ HM.member srvr messQ) others
-          newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) recipients
-          newMessQ = zipAddAllM recipients newAEs messQ
+          newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) others
+          newMessQ = zipAddAllM others newAEs messQ
 
 leaderAE :: Int -> Int -> String -> String -> [Command] -> (String, Int) -> Message
 leaderAE commitIndex currentTerm src baseMid slog (dst, nextIndex) = message
