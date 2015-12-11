@@ -119,9 +119,11 @@ leaderAE commitIndex currentTerm src baseMid slog (dst, nextIndex) = message
 -- to external clients these produce. Updates commitIndex
 leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
+  -- | trace (show $ matchIndices) False = undefined
+  -- | lastApplied >= length slog - 1 = s
   | commitIndex == toBeCommitted = s
   | otherwise = executedServer { commitIndex = toBeCommitted, lastApplied = toBeCommitted }
-  where toBeCommitted = length slog - 1 -- minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
+  where toBeCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
         toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
         executedServer = execute s toBeExecuted
 
@@ -204,7 +206,6 @@ respondFollower s@Server{..} m@Message{..} r@RV{..}
           reject = s { sendMe = push (baseMessage False) sendMe }
 
 respondFollower s@Server{..} m@Message{..} r@AE{..}
-  -- | trace (sid ++ " LAST : " ++ (show $ prevLogIndex + length entries)) False = undefined
   | term < currentTerm = reject
   | prevLogIndex <= 0 = succeed
   | (length slog - 1 < prevLogIndex) = inconsistent
@@ -231,10 +232,11 @@ respondLeader s@Server{..} m@Message{..} r@AER{..}
   | success == False = s { nextIndices = HM.adjust (\x -> if x <= 0 then 0 else x - 1) src nextIndices,
                           messQ = newMessQ }
   | success == True =  s { nextIndices = HM.insert src newNextIndex nextIndices,
-                          matchIndices = HM.insert src lastIndex matchIndices,
+                          matchIndices = HM.insert src newMatchIndex matchIndices,
                           messQ = newMessQ }
     where newMessQ = HM.delete src messQ
           newNextIndex = if lastIndex >= length slog then length slog - 1 else lastIndex + 1
+          newMatchIndex = if lastIndex >= length slog then length slog - 1 else lastIndex
 
 respondLeader s@Server{..} m@Message{..} _ = s
 

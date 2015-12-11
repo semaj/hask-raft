@@ -62,7 +62,7 @@ getNextCommands [] _ = []
 getNextCommands slog nextIndex
   | nextIndex > length slog = error $ "getNextCommands: nextIndex greater than slength " ++ (show nextIndex) ++ " : " ++ (show $ length slog)
   | nextIndex == length slog = []
-  | otherwise = take 15 $ drop nextIndex slog
+  | otherwise = take 17 $ drop nextIndex slog
 
 upToDate :: [Command] -> Int -> Int -> Bool
 upToDate [] _ _ = True
