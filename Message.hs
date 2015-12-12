@@ -10,9 +10,6 @@ import Data.Maybe
 import GHC.Generics
 import Data.Time.Clock
 
-timeoutRange :: (Int, Int)
-timeoutRange = (500, 750) -- ms
-
 data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {
   ctype :: CommandType,

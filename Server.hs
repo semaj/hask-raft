@@ -88,8 +88,7 @@ checkVotes s@Server{..}
                                                           sid
                                                           ("init" ++ srvr)
                                                           slog
-                                                          (srvr, (commitIndex + 1)))
-                                                 others,
+                                                          (srvr, (commitIndex + 1))) others,
                                    votes = HS.empty }
   | otherwise = s
 
@@ -160,6 +159,8 @@ maybeToCandidate now newTimeout s
   | otherwise = s
     where candidate =  s { sState = Candidate,
                            timeout = newTimeout,
+                           messQ = HM.empty,
+                           sendMe = [],
                            -- votedFor = "FFFF", not sure this is necessary yet TODO
                            clock = now,
                            votes = HS.empty,
@@ -215,11 +216,9 @@ followerRVR candidate term mid votedFor currentTerm src success = message
           rvr = Just $ RVR realTerm success
           message = Message src candidate realLeader RAFT mid Nothing Nothing rvr
 
--- respondRV :: Server -> Server -> RMessage 
-
 respondFollower :: UTCTime -> Server -> Message -> RMessage -> Server
 respondFollower _ s@Server{..} m@Message{..} r@RV{..}
-  | term < currentTerm = trace (sid ++ " term r v 2 " ++ candidateId) reject
+  | term < currentTerm = trace (sid ++ "  (" ++ (show currentTerm) ++ ") term r v 2 " ++ candidateId ++ " (" ++ show term ++ ")") reject
   | upToDate slog lastLogTerm lastLogIndex = trace (sid ++ " g v 2 " ++ candidateId) grant
   | otherwise = trace (sid ++ " date r v 2 " ++ candidateId) $ reject { currentTerm = term } -- should we update the term anyway?
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
@@ -237,7 +236,7 @@ respondFollower now s@Server{..} m@Message{..} r@AE{..}
           mIncons = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (-1) False
           inconsistent = s { votedFor = src, currentTerm = term, sendMe = push mIncons sendMe, clock = now }
           deleteSlog = cleanSlog slog prevLogIndex
-          addSlog = slog ++ entries
+          addSlog = union slog entries
           newCommitIndex = getNewCommitIndex leaderCommit commitIndex prevLogIndex (length entries)
           mSucceed = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (length addSlog - 1) True
           succeed = s { slog = addSlog,
@@ -273,9 +272,8 @@ respondCandidate s@Server{..} m@Message{..} r@AE{..}
   | term >= currentTerm = clearPendingQ $ s { sState = Follower, currentTerm = term, votedFor = src }
   | otherwise = s
 respondCandidate s@Server{..} m@Message{..} r@RV{..}
-  | term < currentTerm = reject
-  | upToDate slog lastLogTerm lastLogIndex = grant { sState = Follower }
-  | otherwise =  reject { currentTerm = term } -- should we update the term anyway?
+  | term > currentTerm && upToDate slog lastLogTerm lastLogIndex = grant { sState = Follower }
+  | otherwise =  reject 
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
           grant = s { sendMe = push (baseMessage True) sendMe,
                       votedFor = candidateId,

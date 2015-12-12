@@ -8,11 +8,13 @@ import Data.Time.Clock
 import Data.Hashable
 import Debug.Trace
 
-
 majority :: Int
 majority = 2 -- because 1 is always implied (1 + 2)
+           
+timeoutRange :: (Int, Int)
+timeoutRange = (400, 700) -- ms
 
-sendCooldown = 0.04
+sendCooldown = 0.037
 
 cooledOff :: UTCTime -> UTCTime -> Bool
 cooledOff now t = diff > sendCooldown
