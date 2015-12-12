@@ -80,8 +80,16 @@ checkVotes s@Server{..}
                                    votedFor = sid,
                                    messQ = HM.empty,
                                    timeQ = HM.fromList $ map (\x -> (x, clock)) others,
-                                   nextIndices = HM.map (const $ commitIndex) nextIndices,
-                                   matchIndices = HM.map (const (commitIndex + 1)) matchIndices,
+                                   nextIndices = HM.map (const $ commitIndex + 1) nextIndices,
+                                   matchIndices = HM.map (const commitIndex) matchIndices,
+                                   sendMe = map (\srvr -> leaderAE
+                                                          commitIndex
+                                                          currentTerm
+                                                          sid
+                                                          ("init" ++ srvr)
+                                                          slog
+                                                          (srvr, (commitIndex + 1)))
+                                                 others,
                                    votes = HS.empty }
   | otherwise = s
 
@@ -105,8 +113,7 @@ serverSend now s@Server{..} = s { sendMe = sendMe ++ resendMessages, timeQ = new
 
 leaderPrepare :: String -> Server -> Server
 leaderPrepare newMid s@Server{..} = s { messQ = newMessQ }
-    where recipients = filter (\ srvr -> not $ HM.member srvr messQ) others
-          newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) others
+    where newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) others
           newMessQ = zipAddAllM others newAEs messQ
 
 leaderAE :: Int -> Int -> String -> String -> [Command] -> (String, Int) -> Message
