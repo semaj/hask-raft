@@ -28,6 +28,7 @@ data Server = Server {
   sendMe :: ![Message],
   messQ :: HM.HashMap String Message,
   timeQ :: HM.HashMap String UTCTime,
+  pendingQ :: [Message],
   -- Persistent state
   currentTerm :: Int,
   votedFor :: !String,
@@ -52,6 +53,7 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  store = HM.empty,
                                                  messQ = HM.empty,
                                                  timeQ = HM.fromList $ map (\x -> (x, time)) otherIDs,
+                                                 pendingQ = [],
                                                  sendMe = [],
                                                  currentTerm = 0,
                                                  votedFor = "FFFF",
@@ -141,13 +143,13 @@ execute s@Server{..} (Command{..}:cs)
   | ctype == CGET = execute s { sendMe = push (message (Just ckey) get) sendMe } cs
   | ctype == CPUT = execute s { sendMe = push (message (Just ckey) (Just cvalue)) sendMe, store = newStore } cs
     where get = HM.lookup ckey store
-          newStore = HM.insert ckey cvalue store -- lazy eval ftw
+          newStore = HM.insert ckey cvalue store 
           message k v = Message sid creator sid (if isNothing v then FAIL else OK) cmid k v Nothing
 
 maybeToCandidate :: UTCTime -> Int -> Server -> Server
 maybeToCandidate now newTimeout s
   | (sState s) == Leader = s
-  | timedOut (clock s) now (timeout s) = candidate
+  | timedOut (clock s) now (timeout s) = trace ("timed out! " ++ (show $ pendingQ s)) $ candidate
   | otherwise = s
     where candidate =  s { sState = Candidate,
                            timeout = newTimeout,
@@ -166,10 +168,18 @@ receiveMessage s time _ (Just m@Message{..})
   | otherwise = s
       where withNewClock = s { clock = time }
 
+clearPendingQ :: Server -> Server
+clearPendingQ s@Server{..}
+  | length pendingQ == 0 = s
+  | otherwise = clearPendingQ $ responded { pendingQ = tail pendingQ }
+  where pending = head pendingQ
+        responded = if (messType pending) == GET then respondGet s pending else respondPut s pending
+
 -- If we aren't the leader, redirect to it. If we are, push this to our log.
 respondGet :: Server -> Message -> Server
 respondGet s@Server{..} m@Message{..}
   | sState == Leader = s { slog = push command slog }
+  | sState == Candidate = s { pendingQ = push m pendingQ }
   | otherwise = s { sendMe = push redirect sendMe }
     where command = Command CGET currentTerm src mid (fromJust key) ""
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
@@ -178,6 +188,7 @@ respondGet s@Server{..} m@Message{..}
 respondPut :: Server -> Message -> Server
 respondPut s@Server{..} m@Message{..}
   | sState == Leader = s { slog = push command slog }
+  | sState == Candidate = s { pendingQ = push m pendingQ }
   | otherwise = s { sendMe = push redirect sendMe }
     where command = Command CPUT currentTerm src mid (fromJust key) (fromJust value)
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
@@ -245,6 +256,6 @@ respondCandidate s@Server{..} m@Message{..} r@RVR{..}
   | voteGranted == True = s { votes = HS.insert src votes, messQ = HM.delete src messQ }
   | otherwise = s
 respondCandidate s@Server{..} m@Message{..} r@AE{..}
-  | term >= currentTerm = s { sState = Follower, currentTerm = term, votedFor = src }
+  | term >= currentTerm = clearPendingQ $ s { sState = Follower, currentTerm = term, votedFor = src }
   | otherwise = s
 respondCandidate s _ _ = s

@@ -13,11 +13,6 @@ import Data.Time.Clock
 timeoutRange :: (Int, Int)
 timeoutRange = (2000, 2500) -- ms
 
--- data SentMessage = SentMessage {
---   message :: Maybe Message,
---   sent :: UTCTime
--- } deriving (Show, Eq)
-
 data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {
   ctype :: CommandType,
