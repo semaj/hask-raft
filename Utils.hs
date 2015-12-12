@@ -6,6 +6,7 @@ import qualified Data.HashMap.Strict as HM
 
 import Data.Time.Clock
 import Data.Hashable
+import Debug.Trace
 
 
 majority :: Int
@@ -66,8 +67,12 @@ getNextCommands slog nextIndex
 
 upToDate :: [Command] -> Int -> Int -> Bool
 upToDate [] _ _ = True
-upToDate base lastLogTerm lastLogIndex = baseTI <= (lastLogTerm, lastLogIndex)
-    where baseTI = (cterm $ last base, length base)
+upToDate base lastLogTerm lastLogIndex
+  | lastLogTerm >= myLastLogTerm && lastLogIndex >= myLastLogIndex = True
+  | lastLogIndex < myLastLogIndex = trace ("theirs: " ++ (show lastLogIndex) ++ ", mine: " ++ (show myLastLogIndex)) False
+  | otherwise = False
+    where myLastLogTerm = cterm $ last base
+          myLastLogIndex = length base - 1
 
 getNewCommitIndex :: Int -> Int -> Int -> Int -> Int
 getNewCommitIndex leaderCommit commitIndex prevLogIndex lengthEntries

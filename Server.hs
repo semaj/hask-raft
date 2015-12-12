@@ -76,7 +76,7 @@ step newMid now s@Server{..}
 -- could convert Candidate -> Leader
 checkVotes :: Server -> Server
 checkVotes s@Server{..}
-  | HS.size votes >= majority = s { sState = Leader,
+  | HS.size votes >= majority = trace (sid ++ " to lead!") $ s { sState = Leader,
                                    votedFor = sid,
                                    messQ = HM.empty,
                                    timeQ = HM.fromList $ map (\x -> (x, clock)) others,
@@ -149,10 +149,11 @@ execute s@Server{..} (Command{..}:cs)
 maybeToCandidate :: UTCTime -> Int -> Server -> Server
 maybeToCandidate now newTimeout s
   | (sState s) == Leader = s
-  | timedOut (clock s) now (timeout s) = trace ("timed out! " ++ (show $ pendingQ s)) $ candidate
+  | timedOut (clock s) now (timeout s) = trace ("timed out! " ++ (show $ sid s)) $ candidate
   | otherwise = s
     where candidate =  s { sState = Candidate,
                            timeout = newTimeout,
+                           -- votedFor = "FFFF", not sure this is necessary yet TODO
                            clock = now,
                            votes = HS.empty,
                            currentTerm = (currentTerm s) + 1 }
@@ -164,9 +165,9 @@ receiveMessage s time newTimeout Nothing = maybeToCandidate time newTimeout s
 receiveMessage s time _ (Just m@Message{..})
   | messType ==  GET = respondGet s m
   | messType == PUT = respondPut s m
-  | messType == RAFT = respondRaft withNewClock m
+  | messType == RAFT = respondRaft time s m
   | otherwise = s
-      where withNewClock = s { clock = time }
+      -- where withNewClock = s { clock = time }
 
 clearPendingQ :: Server -> Server
 clearPendingQ s@Server{..}
@@ -194,9 +195,9 @@ respondPut s@Server{..} m@Message{..}
           redirect = Message sid src votedFor REDIRECT mid Nothing Nothing Nothing
 
 -- Respond to raft message - delegates based on current state
-respondRaft :: Server -> Message -> Server
-respondRaft s@Server{..} m@Message{..}
-  | sState == Follower = respondFollower s m $ fromJust rmess
+respondRaft :: UTCTime -> Server -> Message -> Server
+respondRaft now s@Server{..} m@Message{..}
+  | sState == Follower = respondFollower now s m $ fromJust rmess
   | sState == Candidate = respondCandidate s m $ fromJust rmess
   | otherwise = respondLeader s m $ fromJust rmess
 
@@ -207,32 +208,38 @@ followerRVR candidate term mid votedFor currentTerm src success = message
           rvr = Just $ RVR realTerm success
           message = Message src candidate realLeader RAFT mid Nothing Nothing rvr
 
-respondFollower :: Server -> Message -> RMessage -> Server
-respondFollower s@Server{..} m@Message{..} r@RV{..}
-  | term < currentTerm = reject
-  | upToDate slog lastLogTerm lastLogIndex = grant
-  | otherwise = reject -- should we update the term anyway?
+-- respondRV :: Server -> Server -> RMessage 
+
+respondFollower :: UTCTime -> Server -> Message -> RMessage -> Server
+respondFollower _ s@Server{..} m@Message{..} r@RV{..}
+  | term < currentTerm = trace (sid ++ " term r v 2 " ++ candidateId) reject
+  | upToDate slog lastLogTerm lastLogIndex = trace (sid ++ " g v 2 " ++ candidateId) grant
+  | otherwise = trace (sid ++ " date r v 2 " ++ candidateId) $ reject { currentTerm = term } -- should we update the term anyway?
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
           grant = s { sendMe = push (baseMessage True) sendMe, votedFor = candidateId, currentTerm = term }
           reject = s { sendMe = push (baseMessage False) sendMe }
 
-respondFollower s@Server{..} m@Message{..} r@AE{..}
+respondFollower now s@Server{..} m@Message{..} r@AE{..}
   | term < currentTerm = reject
   | prevLogIndex <= 0 = succeed
   | (length slog - 1 < prevLogIndex) = inconsistent
   | (cterm $ (slog!!prevLogIndex)) /= prevLogTerm = inconsistent { slog = deleteSlog }
   | otherwise = succeed
     where mReject = Message sid src votedFor RAFT mid Nothing Nothing $ Just $ AER currentTerm (-1) False
-          reject = s { sendMe = push mReject sendMe }
+          reject = s { sendMe = push mReject sendMe, clock = now }
           mIncons = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (-1) False
-          inconsistent = s { votedFor = src, currentTerm = term, sendMe = push mIncons sendMe }
+          inconsistent = s { votedFor = src, currentTerm = term, sendMe = push mIncons sendMe, clock = now }
           deleteSlog = cleanSlog slog prevLogIndex
           addSlog = slog ++ entries
           newCommitIndex = getNewCommitIndex leaderCommit commitIndex prevLogIndex (length entries)
           mSucceed = Message sid src src RAFT mid Nothing Nothing $ Just $ AER term (length addSlog - 1) True
-          succeed = s { slog = addSlog, commitIndex = newCommitIndex, currentTerm = term, sendMe = push mSucceed sendMe }
+          succeed = s { slog = addSlog,
+                        commitIndex = newCommitIndex,
+                        currentTerm = term,
+                        sendMe = push mSucceed sendMe,
+                        clock = now }
 
-respondFollower s _ r = s -- error $ "wtf " ++ (show r)
+respondFollower _ s _ r = s -- error $ "wtf " ++ (show r)
 
 respondLeader :: Server -> Message -> RMessage -> Server
 respondLeader s@Server{..} m@Message{..} r@AE{..}
@@ -258,4 +265,14 @@ respondCandidate s@Server{..} m@Message{..} r@RVR{..}
 respondCandidate s@Server{..} m@Message{..} r@AE{..}
   | term >= currentTerm = clearPendingQ $ s { sState = Follower, currentTerm = term, votedFor = src }
   | otherwise = s
-respondCandidate s _ _ = s
+respondCandidate s@Server{..} m@Message{..} r@RV{..}
+  | term < currentTerm = reject
+  | upToDate slog lastLogTerm lastLogIndex = grant { sState = Follower }
+  | otherwise =  reject { currentTerm = term } -- should we update the term anyway?
+    where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
+          grant = s { sendMe = push (baseMessage True) sendMe,
+                      votedFor = candidateId,
+                      currentTerm = term,
+                      votes = HS.empty }
+          reject = s { sendMe = push (baseMessage False) sendMe }
+respondCandidate s _ r = error $ show r

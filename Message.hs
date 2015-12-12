@@ -11,7 +11,7 @@ import GHC.Generics
 import Data.Time.Clock
 
 timeoutRange :: (Int, Int)
-timeoutRange = (2000, 2500) -- ms
+timeoutRange = (150, 400) -- ms
 
 data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {

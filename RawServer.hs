@@ -57,7 +57,7 @@ serverLoop server chan socket = do
   let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
       mapped = map (((flip (++)) "\n") . toString . encode) $ nub $ sendMe server'
       fails = filter ((== FAIL) . messType) $ sendMe server'
-  -- when (length fails > 0) $ do putStrLn $ show fails
+  when (length fails > 0) $ do putStrLn $ show fails
   -- when (sState server' /= Leader && (length $ sendMe server') > 0) $ do putStrLn $ show $ nub $ map messType $ sendMe server'
   mapM (send socket) mapped
   serverLoop (server' { sendMe = [] } ) chan socket
