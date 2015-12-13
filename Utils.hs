@@ -12,9 +12,14 @@ majority :: Int
 majority = 2 -- because 1 is always implied (1 + 2)
            
 timeoutRange :: (Int, Int)
-timeoutRange = (400, 700) -- ms
+timeoutRange = (750, 1000) -- ms
 
-sendCooldown = 0.037
+sendCooldown = 0.02
+
+heartbeatRate :: Int
+heartbeatRate = 100 -- ms
+
+commandCap = 15
 
 cooledOff :: UTCTime -> UTCTime -> Bool
 cooledOff now t = diff > sendCooldown
@@ -65,7 +70,7 @@ getNextCommands [] _ = []
 getNextCommands slog nextIndex
   | nextIndex > length slog = error $ "getNextCommands: nextIndex greater than slength " ++ (show nextIndex) ++ " : " ++ (show $ length slog)
   | nextIndex == length slog = []
-  | otherwise = take 15 $ drop nextIndex slog
+  | otherwise = take commandCap $ drop nextIndex slog
 
 upToDate :: [Command] -> Int -> Int -> Bool
 upToDate [] _ _ = True

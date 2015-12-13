@@ -43,6 +43,7 @@ data Server = Server {
   votes :: HS.HashSet String,
   --
   timeout :: Int, -- ms
+  lastHB :: UTCTime,
   clock :: UTCTime -- last time we received a raft message OR started an election
 } deriving (Show)
 
@@ -62,6 +63,7 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  lastApplied = -1,
                                                  nextIndices = HM.fromList $ map (\x -> (x, 0)) otherIDs,
                                                  matchIndices = HM.fromList $ map (\x -> (x, (-1))) otherIDs,
+                                                 lastHB = time,
                                                  votes = HS.empty,
                                                  timeout = timeout,
                                                  clock = time }
@@ -71,7 +73,7 @@ step :: String -> UTCTime -> Server -> Server
 step newMid now s@Server{..}
   | sState == Follower = followerExecute s
   | sState == Candidate = checkVotes $ serverSend now $ candidatePrepare newMid $ s
-  | sState == Leader = serverSend now $ leaderPrepare newMid $ leaderExecute s
+  | sState == Leader = sendHBs now $ serverSend now $ leaderPrepare newMid $ leaderExecute s
 
 -- could convert Candidate -> Leader
 checkVotes :: Server -> Server
@@ -110,10 +112,22 @@ serverSend now s@Server{..} = s { sendMe = sendMe ++ resendMessages, timeQ = new
         resendMessages = catMaybes $ map (\ srvr -> HM.lookup srvr messQ) resendMe
         newTimeQ = zipAddAllT resendMe (replicate (length resendMe) now) timeQ
 
+sendHBs :: UTCTime -> Server -> Server
+sendHBs now s@Server{..}
+  | timedOut lastHB now heartbeatRate = s { sendMe = push hb sendMe, lastHB = now }
+  | otherwise = s
+  where ae = Just $ AE (-5) sid (-5) (-5) [] (-5)
+        hb = Message sid "FFFF" sid RAFT "HEARTBEAT" Nothing Nothing ae
+
 leaderPrepare :: String -> Server -> Server
-leaderPrepare newMid s@Server{..} = s { messQ = newMessQ }
+leaderPrepare newMid s@Server{..} = s { messQ = filteredMessQ }
     where newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) others
           newMessQ = zipAddAllM others newAEs messQ
+          filteredMessQ = HM.filter noHeartbeat newMessQ
+
+noHeartbeat :: Message -> Bool
+noHeartbeat (Message _ _ _ _ _ _ _ (Just (AE _ _ _ _ [] _))) = False
+noHeartbeat _ = True
 
 leaderAE :: Int -> Int -> String -> String -> [Command] -> (String, Int) -> Message
 leaderAE commitIndex currentTerm src baseMid slog (dst, nextIndex) = message
@@ -155,7 +169,7 @@ execute s@Server{..} (Command{..}:cs)
 maybeToCandidate :: UTCTime -> Int -> Server -> Server
 maybeToCandidate now newTimeout s
   | (sState s) == Leader = s
-  | timedOut (clock s) now (timeout s) = trace ("timed out! " ++ (show $ sid s)) $ candidate
+  | timedOut (clock s) now (timeout s) = trace ("timed out! " ++ (show $ sid s) ++ " : " ++ (show newTimeout)) $ candidate
   | otherwise = s
     where candidate =  s { sState = Candidate,
                            timeout = newTimeout,
@@ -175,7 +189,6 @@ receiveMessage s time _ (Just m@Message{..})
   | messType == PUT = respondPut s m
   | messType == RAFT = respondRaft time s m
   | otherwise = s
-      -- where withNewClock = s { clock = time }
 
 clearPendingQ :: Server -> Server
 clearPendingQ s@Server{..}
@@ -217,15 +230,21 @@ followerRVR candidate term mid votedFor currentTerm src success = message
           message = Message src candidate realLeader RAFT mid Nothing Nothing rvr
 
 respondFollower :: UTCTime -> Server -> Message -> RMessage -> Server
-respondFollower _ s@Server{..} m@Message{..} r@RV{..}
+respondFollower now s@Server{..} m@Message{..} r@RV{..}
   | term < currentTerm = trace (sid ++ "  (" ++ (show currentTerm) ++ ") term r v 2 " ++ candidateId ++ " (" ++ show term ++ ")") reject
   | upToDate slog lastLogTerm lastLogIndex = trace (sid ++ " g v 2 " ++ candidateId) grant
-  | otherwise = trace (sid ++ " date r v 2 " ++ candidateId) $ reject { currentTerm = term } -- should we update the term anyway?
+  -- | otherwise = trace (sid ++ " date r v 2 " ++ candidateId) $ reject { currentTerm = term } -- should we update the term anyway?
+  | otherwise = reject { currentTerm = term } -- should we update the term anyway?
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
           grant = s { sendMe = push (baseMessage True) sendMe, votedFor = candidateId, currentTerm = term }
           reject = s { sendMe = push (baseMessage False) sendMe }
+          newCandidate = reject { currentTerm = term + 1,
+                                  clock = now,
+                                  votes = HS.empty,
+                                  sState = Candidate }
 
 respondFollower now s@Server{..} m@Message{..} r@AE{..}
+  | mid == "HEARTBEAT" = s { clock = now }
   | term < currentTerm = reject
   | prevLogIndex <= 0 = succeed
   | (length slog - 1 < prevLogIndex) = inconsistent
@@ -280,4 +299,4 @@ respondCandidate s@Server{..} m@Message{..} r@RV{..}
                       currentTerm = term,
                       votes = HS.empty }
           reject = s { sendMe = push (baseMessage False) sendMe }
-respondCandidate s _ r = error $ show r
+respondCandidate s _ r = s -- error $ show r
