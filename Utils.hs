@@ -12,14 +12,14 @@ majority :: Int
 majority = 2 -- because 1 is always implied (1 + 2)
            
 timeoutRange :: (Int, Int)
-timeoutRange = (750, 1000) -- ms
+timeoutRange = (400, 800) -- ms
 
 sendCooldown = 0.02
 
 heartbeatRate :: Int
-heartbeatRate = 100 -- ms
+heartbeatRate = 300 -- ms
 
-commandCap = 15
+commandCap = 20
 
 cooledOff :: UTCTime -> UTCTime -> Bool
 cooledOff now t = diff > sendCooldown
@@ -37,7 +37,7 @@ push :: a -> [a] -> [a]
 push a as = as ++ [a]
 
 getLastLogIndex :: [Command] -> Int
-getLastLogIndex slog = length slog - 1 -- if length slog == 0 then (-1) else length slog - 1
+getLastLogIndex slog = length slog - 1 
 
 getLastLogTerm :: [Command] -> Int
 getLastLogTerm slog = if length slog == 0 then (-1) else cterm $ last slog
@@ -76,7 +76,7 @@ upToDate :: [Command] -> Int -> Int -> Bool
 upToDate [] _ _ = True
 upToDate base lastLogTerm lastLogIndex
   | lastLogTerm >= myLastLogTerm && lastLogIndex >= myLastLogIndex = True
-  | lastLogIndex < myLastLogIndex = trace ("theirs: " ++ (show lastLogIndex) ++ ", mine: " ++ (show myLastLogIndex)) False
+  | lastLogIndex < myLastLogIndex = False
   | otherwise = False
     where myLastLogTerm = cterm $ last base
           myLastLogIndex = length base - 1

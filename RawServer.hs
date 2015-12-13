@@ -1,4 +1,3 @@
-
 module Main where
 import Message
 import Utils
@@ -28,18 +27,14 @@ tryGet chan = do
     response <- readChan chan
     return $ Just response
 
+-- This function runs in its own thread, receiving messages and adding them to a "channel"
 receiver :: Socket -> Chan Message -> IO ()
 receiver s messages = do
   forever $ do
     msg <- recv s 8192
-    --putStrLn "MESSAGE!"
-    --putStrLn msg
     let splitR = splitOn "\n" msg
-    -- putStrLn $ "split: " ++ (show splitR)
     let fsMessages = map fromString splitR
-    -- putStrLn $ "fsm: " ++ (show fsMessages)
     let mMessages = map decode fsMessages :: [Maybe Message]
-    --putStrLn $ "mmess: " ++ (show mMessages)
     writeList2Chan messages $ catMaybes mMessages
 
 getSocket :: String -> IO Socket
@@ -48,21 +43,19 @@ getSocket id = do
   connect soc $ SockAddrUnix id
   return soc
 
+-- This is the main server loop. It attempts to read a message from the
+-- channel, then steps it
 serverLoop :: Server -> Chan Message -> Socket -> IO ()
 serverLoop server chan socket = do
   message <- tryGet chan
   time <- getCurrentTime
   possibleTimeout <- getStdRandom $ randomR timeoutRange
   newMid <- getStdRandom $ randomR (100000, 999999)
+  -- This is where the server receives the message and then responds appropriately
   let server' = step (show (newMid :: Int)) time $ receiveMessage server time possibleTimeout message
-      mapped = map (((flip (++)) "\n") . toString . encode) $ nub $ sendMe server'
-      fails = filter ((== FAIL) . messType) $ sendMe server'
-  -- when (sState server == Leader) $ do putStrLn $ (sid server') ++ " : " ++ (show $ commitIndex server') 
-  -- putStrLn $ (sid server') ++ " : " ++ (show $ length $ slog server')  ++ " x "
-  -- when (length fails > 0) $ do putStrLn $ show fails
-  -- when (sState server' /= Leader && (length $ sendMe server') > 0) $ do putStrLn $ show $ nub $ map messType $ sendMe server'
+      mapped = map (((flip (++)) "\n") . toString . encode) $ sendMe server'
   mapM (send socket) mapped
-  serverLoop (server' { sendMe = [] } ) chan socket
+  serverLoop (server' { sendMe = [] } ) chan socket -- recursive
 
 start :: Server -> Chan Message -> Socket -> IO ()
 start server chan socket = do

@@ -20,31 +20,32 @@ import Debug.Trace
 
 data ServerState = Follower | Candidate | Leader deriving (Show, Eq)
 
+-- (!)s just force a strict datatype, as Haskell is a lazy language by default
 data Server = Server {
   sState :: !ServerState,
-  sid :: !String,
-  others :: ![String],
-  store :: HM.HashMap String String,
-  sendMe :: ![Message],
-  messQ :: HM.HashMap String Message,
-  timeQ :: HM.HashMap String UTCTime,
-  pendingQ :: [Message],
-  -- Persistent state
+  sid :: !String,                      -- ID
+  others :: ![String],                 -- The other server IDs
+  store :: HM.HashMap String String,   -- The hashmap of keys & values
+  sendMe :: ![Message],                -- Messages to send this round
+  messQ :: HM.HashMap String Message,  -- Server -> Next message to send (not heartbeat!)
+  timeQ :: HM.HashMap String UTCTime,  -- Server -> Last time we sent a message (not heartbeat!)
+  pendingQ :: [Message],               -- Followers/Candidates store this so when a leader is elected, flush
+  
   currentTerm :: Int,
-  votedFor :: !String,
-  slog :: ![Command],
-  -- Volatile state
+  votedFor :: !String,                 -- Our leader
+  slog :: ![Command],                  -- Log of commands to execute
+  
   commitIndex :: Int,
   lastApplied :: Int,
-  -- Only on leaders
+  
   nextIndices :: HM.HashMap String Int,
   matchIndices :: HM.HashMap String Int,
-  -- Only on candidates
-  votes :: HS.HashSet String,
-  --
-  timeout :: Int, -- ms
-  lastHB :: UTCTime,
-  clock :: UTCTime -- last time we received a raft message OR started an election
+  
+  votes :: HS.HashSet String,          -- Set filled with servers that voted for us
+  
+  timeout :: Int,                      -- When we will timeout to candidate state (ms)
+  lastHB :: UTCTime,                   -- Last time we sent a heartbeat
+  clock :: UTCTime                     -- last time we received a raft message OR started an election
 } deriving (Show)
 
 initServer :: String -> [String] -> UTCTime -> Int -> Server
@@ -69,16 +70,17 @@ initServer myID otherIDs time timeout = Server { sid = myID,
                                                  clock = time }
 
 
+-- The main function for transitioning servers
 step :: String -> UTCTime -> Server -> Server
 step newMid now s@Server{..}
   | sState == Follower = followerExecute s
   | sState == Candidate = checkVotes $ serverSend now $ candidatePrepare newMid $ s
   | sState == Leader = sendHBs now $ serverSend now $ leaderPrepare newMid $ leaderExecute s
 
--- could convert Candidate -> Leader
+-- Check if the candidate has enough votes. If so, transition to Leader.
 checkVotes :: Server -> Server
 checkVotes s@Server{..}
-  | HS.size votes >= majority = trace (sid ++ " to lead!") $ s { sState = Leader,
+  | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
                                    messQ = HM.empty,
                                    timeQ = HM.fromList $ map (\x -> (x, clock)) others,
@@ -94,24 +96,28 @@ checkVotes s@Server{..}
                                    votes = HS.empty }
   | otherwise = s
 
+-- Produce a RequestVote for a given Candidate's information
 candidateRV :: Int -> String -> String -> [Command] -> String -> Message
 candidateRV currentTerm src baseMid slog dst = Message src dst "FFFF" RAFT (baseMid ++ dst) Nothing Nothing rv
   where lastLogIndex = getLastLogIndex slog
         lastLogTerm = getLastLogTerm slog
         rv = Just $ RV currentTerm src lastLogIndex lastLogTerm
 
+-- Add missing messages (RVs) to our message Q so that they're ready
 candidatePrepare :: String -> Server -> Server
 candidatePrepare newMid s@Server{..} = s { messQ = newMessQ }
   where recipients = filter (\ srvr -> (not $ HS.member srvr votes) && (not $ HM.member srvr messQ)) others
         newRVs = map (candidateRV currentTerm sid newMid slog) recipients
         newMessQ = zipAddAllM recipients newRVs messQ
 
+-- Given a server, send all the things in our messQ if they've timed out in the timeQ
 serverSend :: UTCTime -> Server -> Server
 serverSend now s@Server{..} = s { sendMe = sendMe ++ resendMessages, timeQ = newTimeQ }
   where resendMe = getNeedResending now timeQ
         resendMessages = catMaybes $ map (\ srvr -> HM.lookup srvr messQ) resendMe
         newTimeQ = zipAddAllT resendMe (replicate (length resendMe) now) timeQ
 
+-- If enough time has elapsed, send blank, special heartbeat messages
 sendHBs :: UTCTime -> Server -> Server
 sendHBs now s@Server{..}
   | timedOut lastHB now heartbeatRate = s { sendMe = push hb sendMe, lastHB = now }
@@ -119,12 +125,14 @@ sendHBs now s@Server{..}
   where ae = Just $ AE (-5) sid (-5) (-5) [] (-5)
         hb = Message sid "FFFF" sid RAFT "HEARTBEAT" Nothing Nothing ae
 
+-- Prepare AEs that need to be send, constructing appropriate list of commands
 leaderPrepare :: String -> Server -> Server
 leaderPrepare newMid s@Server{..} = s { messQ = filteredMessQ }
     where newAEs = map (\ srvr -> leaderAE commitIndex currentTerm sid newMid slog (srvr, (HM.!) nextIndices srvr)) others
           newMessQ = zipAddAllM others newAEs messQ
           filteredMessQ = HM.filter noHeartbeat newMessQ
 
+-- Returns false if the entries we would send are empty
 noHeartbeat :: Message -> Bool
 noHeartbeat (Message _ _ _ _ _ _ _ (Just (AE _ _ _ _ [] _))) = False
 noHeartbeat _ = True
@@ -137,18 +145,16 @@ leaderAE commitIndex currentTerm src baseMid slog (dst, nextIndex) = message
           ae = Just $ AE currentTerm src prevLogIndex prevLogTerm entries commitIndex
           message = Message src dst src RAFT (baseMid ++ dst) Nothing Nothing ae
 
--- Leader executes the committed commands in its log and prepares the responses
--- to external clients these produce. Updates commitIndex
+-- Execute the commands in our slog that have been replicated sufficiently
 leaderExecute :: Server -> Server
 leaderExecute s@Server{..}
-  -- | trace (show $ matchIndices) False = undefined
-  -- | lastApplied >= length slog - 1 = s
   | commitIndex == toBeCommitted = s
   | otherwise = executedServer { commitIndex = toBeCommitted, lastApplied = toBeCommitted }
   where toBeCommitted = minimum $ take majority $ reverse $ sort $ HM.elems matchIndices -- (length slog ) - 1
         toBeExecuted = take (toBeCommitted - commitIndex) $ drop (commitIndex + 1) slog
         executedServer = execute s toBeExecuted
 
+-- Execute the commands in our slog if the leader has told us they've been committed
 followerExecute :: Server -> Server
 followerExecute s@Server{..}
   | commitIndex == lastApplied = s
@@ -156,7 +162,7 @@ followerExecute s@Server{..}
     where toBeExecuted = drop (lastApplied + 1) $ take (commitIndex + 1) slog
           executed = (execute s toBeExecuted) { sendMe = sendMe }
 
--- Run commands specified in the slog. Update the slog & add responses to sendMe
+-- Actually run the commands on our Store hashmap
 execute :: Server -> [Command] -> Server
 execute s [] = s
 execute s@Server{..} (Command{..}:cs)
@@ -166,10 +172,11 @@ execute s@Server{..} (Command{..}:cs)
           newStore = HM.insert ckey cvalue store 
           message k v = Message sid creator sid (if isNothing v then FAIL else OK) cmid k v Nothing
 
+-- If we aren't a leader and we've timed out, transition to Candidate state
 maybeToCandidate :: UTCTime -> Int -> Server -> Server
 maybeToCandidate now newTimeout s
   | (sState s) == Leader = s
-  | timedOut (clock s) now (timeout s) = trace ("timed out! " ++ (show $ sid s) ++ " : " ++ (show newTimeout)) $ candidate
+  | timedOut (clock s) now (timeout s) = candidate
   | otherwise = s
     where candidate =  s { sState = Candidate,
                            timeout = newTimeout,
@@ -222,6 +229,7 @@ respondRaft now s@Server{..} m@Message{..}
   | sState == Candidate = respondCandidate s m $ fromJust rmess
   | otherwise = respondLeader s m $ fromJust rmess
 
+-- Get a RequestVote Response, given a follower's information
 followerRVR :: String -> Int -> String -> String -> Int -> String -> Bool -> Message
 followerRVR candidate term mid votedFor currentTerm src success = message
     where realTerm = if success then term else currentTerm
@@ -229,10 +237,11 @@ followerRVR candidate term mid votedFor currentTerm src success = message
           rvr = Just $ RVR realTerm success
           message = Message src candidate realLeader RAFT mid Nothing Nothing rvr
 
+-- Respond to a message. (as a follower)
 respondFollower :: UTCTime -> Server -> Message -> RMessage -> Server
-respondFollower now s@Server{..} m@Message{..} r@RV{..}
-  | term < currentTerm = trace (sid ++ "  (" ++ (show currentTerm) ++ ") term r v 2 " ++ candidateId ++ " (" ++ show term ++ ")") reject
-  | upToDate slog lastLogTerm lastLogIndex = trace (sid ++ " g v 2 " ++ candidateId) grant
+respondFollower now s@Server{..} m@Message{..} r@RV{..} -- Respond to RV
+  | term < currentTerm = reject
+  | upToDate slog lastLogTerm lastLogIndex = grant
   -- | otherwise = trace (sid ++ " date r v 2 " ++ candidateId) $ reject { currentTerm = term } -- should we update the term anyway?
   | otherwise = reject { currentTerm = term } -- should we update the term anyway?
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
@@ -243,7 +252,7 @@ respondFollower now s@Server{..} m@Message{..} r@RV{..}
                                   votes = HS.empty,
                                   sState = Candidate }
 
-respondFollower now s@Server{..} m@Message{..} r@AE{..}
+respondFollower now s@Server{..} m@Message{..} r@AE{..} -- Respond to AE
   | mid == "HEARTBEAT" = s { clock = now }
   | term < currentTerm = reject
   | prevLogIndex <= 0 = succeed
@@ -264,14 +273,15 @@ respondFollower now s@Server{..} m@Message{..} r@AE{..}
                         sendMe = push mSucceed sendMe,
                         clock = now }
 
-respondFollower _ s _ r = s -- error $ "wtf " ++ (show r)
+respondFollower _ s _ r = s
 
+-- Respond to messages as a Leader
 respondLeader :: Server -> Message -> RMessage -> Server
-respondLeader s@Server{..} m@Message{..} r@AE{..}
+respondLeader s@Server{..} m@Message{..} r@AE{..} -- Respond to another AE
   | term > currentTerm = s { sState = Follower, currentTerm = term, votedFor = src }
   | otherwise = s
 
-respondLeader s@Server{..} m@Message{..} r@AER{..}
+respondLeader s@Server{..} m@Message{..} r@AER{..} -- Respond to AE responses
   | success == False = s { nextIndices = HM.adjust (\x -> if x <= 0 then 0 else x - 1) src nextIndices,
                           messQ = newMessQ }
   | success == True =  s { nextIndices = HM.insert src newNextIndex nextIndices,
@@ -283,14 +293,15 @@ respondLeader s@Server{..} m@Message{..} r@AER{..}
 
 respondLeader s@Server{..} m@Message{..} _ = s
 
+-- Respond to messages as a Candidate
 respondCandidate :: Server -> Message -> RMessage -> Server
-respondCandidate s@Server{..} m@Message{..} r@RVR{..}
+respondCandidate s@Server{..} m@Message{..} r@RVR{..} -- respond to RequestVote responses
   | voteGranted == True = s { votes = HS.insert src votes, messQ = HM.delete src messQ }
   | otherwise = s
-respondCandidate s@Server{..} m@Message{..} r@AE{..}
+respondCandidate s@Server{..} m@Message{..} r@AE{..} -- respond to AE responses
   | term >= currentTerm = clearPendingQ $ s { sState = Follower, currentTerm = term, votedFor = src }
   | otherwise = s
-respondCandidate s@Server{..} m@Message{..} r@RV{..}
+respondCandidate s@Server{..} m@Message{..} r@RV{..} -- respond to other RVs
   | term > currentTerm && upToDate slog lastLogTerm lastLogIndex = grant { sState = Follower }
   | otherwise =  reject 
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
@@ -299,4 +310,4 @@ respondCandidate s@Server{..} m@Message{..} r@RV{..}
                       currentTerm = term,
                       votes = HS.empty }
           reject = s { sendMe = push (baseMessage False) sendMe }
-respondCandidate s _ r = s -- error $ show r
+respondCandidate s _ r = s 

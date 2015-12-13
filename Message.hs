@@ -10,6 +10,9 @@ import Data.Maybe
 import GHC.Generics
 import Data.Time.Clock
 
+-- This file contains the JSON decoding / encoding stuff. Not very interesting,
+-- As there's a bit of boilerplate for this in haskell as its so strict.
+
 data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {
   ctype :: CommandType,
