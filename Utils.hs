@@ -12,9 +12,9 @@ majority :: Int
 majority = 2 -- because 1 is always implied (1 + 2)
            
 timeoutRange :: (Int, Int)
-timeoutRange = (400, 800) -- ms
+timeoutRange = (750, 1000) -- ms
 
-sendCooldown = 0.02
+sendCooldown = 0.015
 
 heartbeatRate :: Int
 heartbeatRate = 300 -- ms
