@@ -5,6 +5,11 @@ A rudimentary implementation of the Raft distributed consensus protocol.
 
 https://raft.github.io/
 
+Note
+----
+
+This is a *virtual* implementation of the Raft protocol, used to implement a basic (in-memory) key-value store.
+
 High Level Approach
 -------------------
 
@@ -53,3 +58,12 @@ Does not
 
 
 If, for some reason, you'd like to run this implementation - let me know.
+
+
+License
+-------
+MIT: https://opensource.org/licenses/MIT
+With the added caveat that you can't use it for school, as this was done for a class. :P
+
+> But aren't you giving people code they could use for class?
+Sure... but so are https://raft.github.io/#implementations , and I'm those work a bit better
