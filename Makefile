@@ -7,4 +7,4 @@ kvstore :
 	ghc RawServer.hs -o 3700kvstore
 
 clean :
-	rm Server.hi Server.o RawServer.hi RawServer.o 3700kvstore Message.hi Message.o
+	rm Server.hi Server.o RawServer.hi RawServer.o 3700kvstore Message.hi Message.o Utils.hi Utils.o
