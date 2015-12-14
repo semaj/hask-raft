@@ -17,6 +17,8 @@ cabal.sandbox.config
 .py
 .pyc
 .json
+Test
+TAGS
 3700kvstore
 .py~
 project5
