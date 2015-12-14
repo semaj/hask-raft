@@ -34,7 +34,7 @@ Also - if a message like that has expired we won't necessarily wait for it befor
 
 Testing
 -------
-I created a test file, `Test.hs`, which was mainly for scratchwork and making sure individual functions work. I don't recommend running this, as it's not comprehensive and was used mainly as a sanity check. It was nice to have the ability to run this simulator locally and be able to edit the simulator (and add debugging messages there).
+I created a test file, `Test.hs`, which was mainly for scratchwork and making sure individual functions work. I don't recommend running this, as it's not comprehensive and was used mainly as a sanity check.
 
 What it does & doesn't do
 -------------------------
@@ -52,4 +52,4 @@ Does not
 - Any persistent storage
 
 
-
+If, for some reason, you'd like to run this implementation - let me know.
