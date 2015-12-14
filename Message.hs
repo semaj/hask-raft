@@ -10,13 +10,8 @@ import Data.Maybe
 import GHC.Generics
 import Data.Time.Clock
 
-timeoutRange :: (Int, Int)
-timeoutRange = (2000, 2500) -- ms
-
-data SentMessage = SentMessage {
-  message :: Maybe Message,
-  sent :: UTCTime
-} deriving (Show, Eq)
+-- This file contains the JSON decoding / encoding stuff. Not very interesting,
+-- As there's a bit of boilerplate for this in haskell as its so strict.
 
 data CommandType = CGET | CPUT deriving (Show, Generic, Eq)
 data Command = Command {
