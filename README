@@ -31,6 +31,10 @@ Also - if a message like that has expired we won't necessarily wait for it befor
 Problems
 --------
 
+*******
+EDIT: In hour 54 (really, I have a plugin that tracks how much time I spend on projects - I can show you the graphs if youw ant), I discovered the bug. Also, there are 3 hours until the deadline. I was only timing out clients when it *didn't* receive a message. But if it received a message that doesn't update it's time (like a request vote) it wouldn't attempt to time out. This was leading to deadlocks. I'm still fighting with getting the easier tests to accept the message amount while getting the later tests to accept the latency, but I have officially seen every test pass with a relatively high rate of reliability.
+*******
+
 There is a non-deterministic bug here somewhere. It is very possible for things to get into a bad state, in which case it will
 never elect a new leader and things will fail. Unfortunately I've spent > 50 hours on this project so I'm too burnt out too continue for now...
 

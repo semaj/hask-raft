@@ -80,6 +80,7 @@ step newMid now s@Server{..}
 -- Check if the candidate has enough votes. If so, transition to Leader.
 checkVotes :: Server -> Server
 checkVotes s@Server{..}
+  -- | HS.size votes >= majority = trace (sid ++ " to lead w/ " ++ (show $ HS.size votes) ++ " votes, term " ++ (show currentTerm)) $
   | HS.size votes >= majority = s { sState = Leader,
                                    votedFor = sid,
                                    messQ = HM.empty,
@@ -176,6 +177,7 @@ execute s@Server{..} (Command{..}:cs)
 maybeToCandidate :: UTCTime -> Int -> Server -> Server
 maybeToCandidate now newTimeout s
   | (sState s) == Leader = s
+  -- | timedOut (clock s) now (timeout s) = trace ((sid s) ++ " timed out (current leader " ++ (votedFor s) ++ "), moving to term " ++ (show $ currentTerm s + 1)) candidate
   | timedOut (clock s) now (timeout s) = candidate
   | otherwise = s
     where candidate =  s { sState = Candidate,
@@ -191,11 +193,11 @@ maybeToCandidate now newTimeout s
 -- If not, respond to the message
 receiveMessage :: Server -> UTCTime -> Int -> Maybe Message -> Server
 receiveMessage s time newTimeout Nothing = maybeToCandidate time newTimeout s
-receiveMessage s time _ (Just m@Message{..})
-  | messType ==  GET = respondGet s m
-  | messType == PUT = respondPut s m
-  | messType == RAFT = respondRaft time s m
-  | otherwise = s
+receiveMessage s time newTimeout (Just m@Message{..})
+  | messType ==  GET = maybeToCandidate time newTimeout $ respondGet s m
+  | messType == PUT = maybeToCandidate time newTimeout $ respondPut s m
+  | messType == RAFT = maybeToCandidate time newTimeout $ respondRaft time s m
+  | otherwise = maybeToCandidate time newTimeout s
 
 clearPendingQ :: Server -> Server
 clearPendingQ s@Server{..}
@@ -240,17 +242,15 @@ followerRVR candidate term mid votedFor currentTerm src success = message
 -- Respond to a message. (as a follower)
 respondFollower :: UTCTime -> Server -> Message -> RMessage -> Server
 respondFollower now s@Server{..} m@Message{..} r@RV{..} -- Respond to RV
+  -- | term < currentTerm = trace (sid ++ " rejecting " ++ candidateId ++ " for term. mine: " ++ (show currentTerm) ++ ", theirs: " ++ (show term)) reject
   | term < currentTerm = reject
+  -- | upToDate slog lastLogTerm lastLogIndex = trace (sid ++ " granting " ++ candidateId ++ " for term " ++ show term) grant
   | upToDate slog lastLogTerm lastLogIndex = grant
-  -- | otherwise = trace (sid ++ " date r v 2 " ++ candidateId) $ reject { currentTerm = term } -- should we update the term anyway?
+  -- | otherwise = trace (sid ++ " rejecting " ++ candidateId ++ " for up-to-dateness, their term: " ++ (show term) ++ ", my term: " ++ show currentTerm ++ ", am I timed out? " ++ (show $ clock)) reject { currentTerm = term } -- should we update the term anyway?
   | otherwise = reject { currentTerm = term } -- should we update the term anyway?
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
           grant = s { sendMe = push (baseMessage True) sendMe, votedFor = candidateId, currentTerm = term }
           reject = s { sendMe = push (baseMessage False) sendMe }
-          newCandidate = reject { currentTerm = term + 1,
-                                  clock = now,
-                                  votes = HS.empty,
-                                  sState = Candidate }
 
 respondFollower now s@Server{..} m@Message{..} r@AE{..} -- Respond to AE
   | mid == "HEARTBEAT" = s { clock = now }
@@ -302,6 +302,7 @@ respondCandidate s@Server{..} m@Message{..} r@AE{..} -- respond to AE responses
   | term >= currentTerm = clearPendingQ $ s { sState = Follower, currentTerm = term, votedFor = src }
   | otherwise = s
 respondCandidate s@Server{..} m@Message{..} r@RV{..} -- respond to other RVs
+  -- | term > currentTerm && upToDate slog lastLogTerm lastLogIndex = trace (sid ++ " Cgranting " ++ candidateId ++ " for term " ++ show term ++ ", my term was " ++ (show currentTerm)) grant { sState = Follower }
   | term > currentTerm && upToDate slog lastLogTerm lastLogIndex = grant { sState = Follower }
   | otherwise =  reject 
     where baseMessage = followerRVR candidateId term mid votedFor currentTerm sid  -- needs success (curried)
