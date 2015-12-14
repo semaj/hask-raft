@@ -5,10 +5,10 @@ High Level Approach
 -------------------
 
 Files:
-RawServer.hs -> The monadic, IO stuff. Start here `serverLoop`
-Server.hs -> The actual server code
-Message.hs -> The message record & JSON parsing stuff
-Utils.hs -> Helper functions, mostly self-explanatory
+- RawServer.hs -> The monadic, IO stuff. Start here `serverLoop`
+- Server.hs -> The actual server code
+- Message.hs -> The message record & JSON parsing stuff
+- Utils.hs -> Helper functions, mostly self-explanatory
 
 The server keeps track of the following important things:
 - Who is the leader
